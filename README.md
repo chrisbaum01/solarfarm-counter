@@ -4,7 +4,7 @@ Counts ground-mounted solar parks along the Autobahn between two German cities.
 
 ```
 München → Nürnberg
-47 solar parks along 156.1 km of Autobahn (A 9, A 73)
+37 solar parks along 156.1 km of Autobahn (A 9, A 73)
 ```
 
 ![Screenshot](docs/screenshot.png)
@@ -68,13 +68,13 @@ On München → Nürnberg, with both sources:
 | after excluding rooftop PV | 547 |
 | after keeping only what is within 500 m of the Autobahn | 136 |
 | after merging features within 300 m of each other | 48 |
-| after dropping clusters under 10,000 m² | **47** |
+| after dropping clusters under 10,000 m² | **37** |
 
 Every one of those steps is reported in the API response under `stats`, so the headline number
 is always traceable back to the raw data.
 
 The registry matters more than any threshold: the same route yields **22 parks from OSM alone**
-and **47 with the registry added** (5 OSM only, 23 in both, 19 registry only).
+and **37 with the registry added**.
 
 ### Definitions you can change
 
@@ -90,13 +90,13 @@ These genuinely move the answer, which is why they are exposed rather than hard-
 (München → Nürnberg, both sources):
 
 ```
-min_area_m2   0 → 48 parks      corridor_m  200 → 41 parks
-          10000 → 47 parks                  500 → 47 parks
-          20000 → 47 parks                 1000 → 56 parks
+min_area_m2   0 → 48 parks      min_area_m2  20000 → 33 parks
+           5000 → 43 parks                   50000 → 22 parks
+          10000 → 37 parks
 ```
 
-The size filter bites far less once the registry is in play, because a unit the register calls a
-ground-mount solar park is counted regardless of its declared size.
+Parks whose size is unknown — registry units that declare no land area — cannot be size-filtered
+and are always kept, flagged in the response rather than silently dropped or counted as zero.
 
 ## API
 

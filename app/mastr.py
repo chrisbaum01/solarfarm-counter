@@ -117,11 +117,13 @@ def to_elements(units: list[MastrUnit]) -> list[dict]:
                 "_source": "mastr",
                 "_declared_area_m2": unit.area_m2,
                 "_capacity_kw": unit.capacity_kw,
-                "tags": {
-                    "power": "plant",
-                    "plant:source": "solar",
-                    **({"name": unit.best_name} if unit.best_name else {}),
-                },
+                # Deliberately no power=plant / plant:source=solar here. Those
+                # tags exempt a cluster from the minimum-area filter, which is
+                # meant for features OSM has explicitly declared a plant. Every
+                # registry unit carrying them made the filter inert: a 6,000 m²
+                # park survived a 10,000 m² threshold. A registry unit that
+                # declares its area is filtered on that area like anything else.
+                "tags": {**({"name": unit.best_name} if unit.best_name else {})},
             }
         )
     return elements

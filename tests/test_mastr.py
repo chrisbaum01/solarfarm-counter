@@ -199,6 +199,27 @@ class TestCrossSourceMerge:
         parks = self._parks([self._osm_way(1, 49.0, 11.02)] + mastr.to_elements(units))
         assert len(parks) == 2
 
+    def test_registry_units_obey_the_size_filter(self):
+        """Registry units must not be exempt from the minimum-area threshold.
+
+        Regression: MaStR elements were given power=plant/plant:source=solar,
+        which is the marker that exempts an explicitly declared plant from the
+        size filter. Every registry unit tripped it, making the filter inert --
+        a 6,000 m² park survived a 10,000 m² threshold.
+        """
+        lat, lon = 49.0 + 50 / 110_574, 11.05
+        small = [mastr.MastrUnit("SEE1", lat, lon, "u", "Small Park", 600.0,
+                                 6_000.0, None, None)]
+        assert self._parks(mastr.to_elements(small), min_area_m2=10_000) == []
+        assert len(self._parks(mastr.to_elements(small), min_area_m2=1_000)) == 1
+
+    def test_osm_declared_plant_is_still_exempt(self):
+        """The exemption must survive for what it was actually meant for."""
+        lat, lon = 49.0 + 50 / 110_574, 11.05
+        tiny = self._osm_way(1, lat, lon, d=0.0002)  # far below the threshold
+        parks = self._parks([tiny], min_area_m2=10_000)
+        assert len(parks) == 1, "an OSM power=plant must not be size-filtered away"
+
     def test_registry_unit_without_area_survives_size_filter(self):
         """Unknown size must not be read as zero and filtered away."""
         lat, lon = 49.0 + 50 / 110_574, 11.05
