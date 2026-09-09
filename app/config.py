@@ -46,13 +46,17 @@ NOMINATIM_URL = os.environ.get(
 OSRM_URL = os.environ.get(
     "SOLARFARM_OSRM_URL", "https://router.project-osrm.org/route/v1/driving"
 )
+# Mirrors MUST carry global (or at least all-German) data. A regional instance
+# answers an out-of-area query with HTTP 200 and zero elements, which is
+# indistinguishable from "no solar farms here" and gets cached as fact.
+# overpass.osm.ch was in this list and does exactly that: Zurich returns 18,577
+# buildings, Munich returns 0. Verify coverage before adding an endpoint.
 OVERPASS_ENDPOINTS = [
     e.strip()
     for e in os.environ.get(
         "SOLARFARM_OVERPASS_ENDPOINTS",
         "https://overpass-api.de/api/interpreter,"
-        "https://overpass.kumi.systems/api/interpreter,"
-        "https://overpass.osm.ch/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter",
     ).split(",")
     if e.strip()
 ]
@@ -72,7 +76,7 @@ MASTR_DB_PATH = Path(
 )
 # Bump when the Overpass query text changes, so stale rows are ignored rather
 # than silently served under a different query definition.
-QUERY_VERSION = 1
+QUERY_VERSION = 2  # bumped: v1 tiles may hold empty results from a regional mirror
 TILE_TTL_SECONDS = 30 * 24 * 3600
 GEOCODE_TTL_SECONDS = 90 * 24 * 3600
 

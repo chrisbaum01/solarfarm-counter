@@ -21,7 +21,7 @@ def isolate_cache(tmp_path, monkeypatch):
 def _slow_fetch(delay: float):
     async def fake(client, tile):
         await asyncio.sleep(delay)
-        return [{"type": "way", "id": int(tile[0] * 1000), "tags": {}, "geometry": []}]
+        return [{"type": "way", "id": int(tile[0] * 1000), "tags": {}, "geometry": []}], "test"
     return fake
 
 
@@ -80,9 +80,9 @@ async def test_partial_completion_keeps_what_finished(monkeypatch):
     async def mixed(client, tile):
         calls["n"] += 1
         if calls["n"] == 1:
-            return [{"type": "way", "id": 1, "tags": {}, "geometry": []}]
+            return [{"type": "way", "id": 1, "tags": {}, "geometry": []}], "test"
         await asyncio.sleep(10.0)
-        return []
+        return [], "test"
 
     monkeypatch.setattr(overpass, "_fetch_tile", mixed)
     monkeypatch.setattr(config, "OVERPASS_CONCURRENCY", 3)

@@ -125,7 +125,9 @@ class OverpassTimeout(OverpassError):
     """The search deadline expired before any map data arrived."""
 
 
-async def _fetch_tile(client: httpx.AsyncClient, tile: tuple[float, float, float, float]) -> list[dict]:
+async def _fetch_tile(
+    client: httpx.AsyncClient, tile: tuple[float, float, float, float]
+) -> tuple[list[dict], str]:
     s, w, n, e = tile
     query = _QUERY_TEMPLATE.format(s=s, w=w, n=n, e=e)
 
@@ -145,7 +147,7 @@ async def _fetch_tile(client: httpx.AsyncClient, tile: tuple[float, float, float
                 await asyncio.sleep(wait)
                 continue
             resp.raise_for_status()
-            return resp.json().get("elements", [])
+            return resp.json().get("elements", []), endpoint
         except (httpx.HTTPError, ValueError) as exc:
             last_error = exc
             log.warning("overpass request to %s failed: %s", endpoint, exc)
@@ -174,7 +176,7 @@ async def fetch_solar_features(
             misses.append(tile)
         else:
             hits += 1
-            for el in cached:
+            for el in cached.get("elements", []):
                 elements[(el["type"], el["id"])] = el
 
     failed = 0
@@ -188,8 +190,10 @@ async def fetch_solar_features(
             async def one(tile):
                 nonlocal completed
                 async with semaphore:
-                    result = await _fetch_tile(client, tile)
-                    cache.put(_tile_key(tile), result)
+                    result, endpoint = await _fetch_tile(client, tile)
+                    # Record the source. An empty tile is otherwise
+                    # indistinguishable from one a broken mirror emptied.
+                    cache.put(_tile_key(tile), {"endpoint": endpoint, "elements": result})
                     completed += 1
                     if progress:
                         progress(completed, len(misses))

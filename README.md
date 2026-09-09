@@ -161,6 +161,12 @@ corridor.
 between routes — München → Nürnberg and München → Berlin reuse the same A 9 tiles. An early
 prototype using route-shaped boxes took 215 s and was repeatedly rate-limited.
 
+**Overpass mirrors must have global coverage.** A regional instance answers an out-of-area
+query with HTTP 200 and zero elements — indistinguishable from "no solar farms here", and it gets
+cached as fact. `overpass.osm.ch` was briefly in the fallback list and does exactly that: Zurich
+returns 18,577 buildings, Munich returns 0. Each cached tile now records the mirror that served
+it, so an empty tile is attributable rather than anonymous.
+
 **Failures are reported, never hidden.** If a tile cannot be fetched after retries across three
 mirrors, the response still returns, with a warning that the count is a lower bound. Parks
 mapped only as points have no measurable area; they are returned with `area_m2: null` and
@@ -172,7 +178,7 @@ flagged, rather than being silently dropped by the size filter or counted as zer
 pytest
 ```
 
-86 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
+90 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
 `tests/fixtures/`, including regression checks pinning the real München → Nürnberg counts.
 CI runs them on Python 3.10 through 3.13.
 
