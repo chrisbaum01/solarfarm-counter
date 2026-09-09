@@ -86,6 +86,20 @@
     .src-both  { background: #3a2f14; color: #fde68a; }
   }
   a { color: var(--accent); }
+  .sheet-head { margin-bottom: 12px; }
+  .sheet-head h2 { font-size: 15px; margin: 0 0 2px; }
+  .sheet-sub { color: var(--muted); font-size: 12px; }
+  #states-card tfoot td {
+    font-weight: 600; border-top: 2px solid var(--line); border-bottom: 0;
+  }
+  /* A bar behind the number makes the spread readable at a glance without a
+     separate chart. */
+  .bar { position: relative; }
+  .bar span { position: relative; z-index: 1; }
+  .bar::before {
+    content: ""; position: absolute; right: 0; top: 4px; bottom: 4px;
+    width: calc(var(--frac) * 100%); background: var(--accent-soft); border-radius: 3px;
+  }
   .stats { color: var(--muted); font-size: 12px; margin-top: 12px; }
   #error { display: none; color: #b91c1c; }
   @media (prefers-color-scheme: dark) { #error { color: #fca5a5; } }
@@ -174,6 +188,32 @@
         <tbody id="tbody"></tbody>
       </table>
     </div>
+  </div>
+  <div class="card" id="states-card">
+    <div class="sheet-head">
+      <h2>Ground-mounted solar parks by state</h2>
+      <div class="sheet-sub" id="states-sub">Loading…</div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th data-skey="state">State</th>
+            <th data-skey="sites_per_1000km2" title="Distinct parks per 1000 km² of state area">Parks / 1000 km²</th>
+            <th data-skey="mw_per_1000km2" title="Installed capacity per 1000 km² of state area">MW / 1000 km²</th>
+            <th data-skey="sites">Parks</th>
+            <th data-skey="capacity_mw">Total MW</th>
+            <th data-skey="median_site_mw" title="Half the parks are smaller than this">Median park</th>
+            <th data-skey="largest_site_mw">Largest</th>
+            <th data-skey="share_sites_pct" title="Share of all German ground-mount parks">% of parks</th>
+            <th data-skey="share_mw_pct" title="Share of all German ground-mount capacity">% of MW</th>
+          </tr>
+        </thead>
+        <tbody id="states-body"></tbody>
+        <tfoot id="states-foot"></tfoot>
+      </table>
+    </div>
+    <div class="stats" id="states-note"></div>
   </div>
 </main>
 
@@ -332,6 +372,86 @@ function renderTable() {
     };
   });
 }
+
+// ---- per-state analysis sheet -------------------------------------------
+let statesRows = [], statesSort = 'mw_per_1000km2', statesAsc = false;
+
+const fmtNum = (v, d = 0) =>
+  v == null ? '<span class="unknown">–</span>' : v.toLocaleString('en-US',
+    { minimumFractionDigits: d, maximumFractionDigits: d });
+
+function renderStates() {
+  const max = {};
+  for (const k of ['sites_per_1000km2', 'mw_per_1000km2'])
+    max[k] = Math.max(...statesRows.map(r => r[k] || 0)) || 1;
+
+  const rows = [...statesRows].sort((a, b) => {
+    const x = a[statesSort], y = b[statesSort];
+    if (typeof x === 'string') return statesAsc ? x.localeCompare(y) : y.localeCompare(x);
+    return statesAsc ? (x || 0) - (y || 0) : (y || 0) - (x || 0);
+  });
+
+  $('states-body').innerHTML = rows.map(r => `<tr>
+    <td>${r.state}</td>
+    <td class="num bar" style="--frac:${(r.sites_per_1000km2 || 0) / max.sites_per_1000km2}"><span>${fmtNum(r.sites_per_1000km2, 1)}</span></td>
+    <td class="num bar" style="--frac:${(r.mw_per_1000km2 || 0) / max.mw_per_1000km2}"><span>${fmtNum(r.mw_per_1000km2, 1)}</span></td>
+    <td class="num">${fmtNum(r.sites)}</td>
+    <td class="num">${fmtNum(r.capacity_mw)}</td>
+    <td class="num">${r.median_site_mw == null ? '<span class="unknown">–</span>' : fmtNum(r.median_site_mw, 2)}</td>
+    <td class="num">${r.largest_site_mw == null ? '<span class="unknown">–</span>' : fmtNum(r.largest_site_mw, 1)}</td>
+    <td class="num">${fmtNum(r.share_sites_pct, 1)}%</td>
+    <td class="num">${fmtNum(r.share_mw_pct, 1)}%</td>
+  </tr>`).join('');
+}
+
+async function loadStates() {
+  try {
+    const r = await fetch('/api/states');
+    const d = await r.json();
+    if (!d.available) {
+      $('states-card').style.display = 'none';
+      return;
+    }
+    statesRows = d.states;
+    renderStates();
+
+    const t = d.totals;
+    $('states-sub').textContent =
+      `${t.sites.toLocaleString('en-US')} parks · ${Math.round(t.capacity_mw).toLocaleString('en-US')} MW · `
+      + `${t.sites_per_1000km2} parks and ${t.mw_per_1000km2} MW per 1000 km² across Germany`;
+    $('states-foot').innerHTML = `<tr>
+      <td>Germany</td>
+      <td class="num">${t.sites_per_1000km2.toFixed(1)}</td>
+      <td class="num">${t.mw_per_1000km2.toFixed(1)}</td>
+      <td class="num">${t.sites.toLocaleString('en-US')}</td>
+      <td class="num">${Math.round(t.capacity_mw).toLocaleString('en-US')}</td>
+      <td class="num">–</td><td class="num">–</td>
+      <td class="num">100%</td><td class="num">100%</td>
+    </tr>`;
+
+    const filter = d.commercial_filter
+      ? 'classified as commercial in the register'
+      : 'above ' + d.params.min_kw + ' kW (a size proxy for commercial use)';
+    $('states-note').textContent =
+      `Ground-mounted (Freiflächen) units only, ${filter}. Units within `
+      + `${d.params.link_m} m of each other count as one park, the same rule used for routes. `
+      + `Source: Marktstammdatenregister (${d.source}); state areas from the Statistisches Bundesamt.`;
+  } catch (err) {
+    $('states-sub').textContent = 'Could not load the state analysis.';
+  }
+}
+
+document.querySelectorAll('th[data-skey]').forEach(th => {
+  th.onclick = () => {
+    const k = th.dataset.skey;
+    statesAsc = statesSort === k ? !statesAsc : (k === 'state');
+    statesSort = k;
+    document.querySelectorAll('th[data-skey]').forEach(o => o.removeAttribute('aria-sort'));
+    th.setAttribute('aria-sort', statesAsc ? 'ascending' : 'descending');
+    renderStates();
+  };
+});
+loadStates();
 
 document.querySelectorAll('th[data-key]').forEach(th => {
   th.onclick = () => {

@@ -10,7 +10,7 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
-from . import cache, config, geocode, mastr, overpass, routing
+from . import analysis, cache, config, geocode, mastr, overpass, routing
 from .models import SearchResponse
 from .pipeline import SearchParams, search
 
@@ -39,6 +39,26 @@ async def health() -> dict:
         "cache": cache.stats(),
         "mastr": {"available": store.available(), **store.meta()},
     }
+
+
+@app.get("/api/states")
+async def api_states(
+    min_kw: float = Query(
+        analysis.MIN_COMMERCIAL_KW, ge=0,
+        description="Ignore ground-mount units below this, as farm self-supply "
+        "rather than commercial parks",
+    ),
+    link_m: float = Query(
+        analysis.SITE_LINK_M, gt=0, le=5000,
+        description="Units closer than this count as one park",
+    ),
+) -> dict:
+    """Ground-mount solar parks per federal state.
+
+    Computed from the local registry extract, so it is independent of any route
+    search and needs no network.
+    """
+    return analysis.state_statistics(min_kw=min_kw, link_m=link_m)
 
 
 @app.get("/api/search", response_model=SearchResponse)

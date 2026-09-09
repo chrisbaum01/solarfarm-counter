@@ -20,17 +20,22 @@ CATALOG = """<?xml version="1.0" encoding="UTF-8"?>
   <Katalogwert><Id>35</Id><Wert>In Betrieb</Wert><KatalogKategorieId>2</KatalogKategorieId></Katalogwert>
   <Katalogwert><Id>31</Id><Wert>Endgültig stillgelegt</Wert><KatalogKategorieId>2</KatalogKategorieId></Katalogwert>
   <Katalogwert><Id>2495</Id><Wert>Solare Strahlungsenergie</Wert><KatalogKategorieId>3</KatalogKategorieId></Katalogwert>
+  <Katalogwert><Id>713</Id><Wert>Haushalt</Wert><KatalogKategorieId>4</KatalogKategorieId></Katalogwert>
+  <Katalogwert><Id>714</Id><Wert>Landwirtschaft</Wert><KatalogKategorieId>4</KatalogKategorieId></Katalogwert>
+  <Katalogwert><Id>715</Id><Wert>Industrie</Wert><KatalogKategorieId>4</KatalogKategorieId></Katalogwert>
 </Katalogwerte>
 """
 
 
 def _unit(uid, art=852, status=35, lat="48.2637", lon="11.2830",
-          hectares="4.5", park="ANUMAR Solarpark Bergkirchen (Feld 1)", state="Bayern"):
+          hectares="4.5", park="ANUMAR Solarpark Bergkirchen (Feld 1)", state="Bayern",
+          usage=None):
     coords = ""
     if lat is not None:
         coords = f"<Breitengrad>{lat}</Breitengrad><Laengengrad>{lon}</Laengengrad>"
     area = f"<GroesseDerInAnspruchGenommenenFlaecheInHektar>{hectares}</GroesseDerInAnspruchGenommenenFlaecheInHektar>" if hectares else ""
     parkname = f"<NameDesSolarparks>{park}</NameDesSolarparks>" if park else ""
+    nutzung = f"<Nutzungsbereich>{usage}</Nutzungsbereich>" if usage else ""
     return f"""  <EinheitSolar>
     <EinheitMastrNummer>{uid}</EinheitMastrNummer>
     <ArtDerSolaranlage>{art}</ArtDerSolaranlage>
@@ -38,7 +43,7 @@ def _unit(uid, art=852, status=35, lat="48.2637", lon="11.2830",
     <Energietraeger>2495</Energietraeger>
     {coords}
     <Bruttoleistung>7500.5</Bruttoleistung>
-    {area}{parkname}
+    {area}{parkname}{nutzung}
     <NameStromerzeugungseinheit>Einheit {uid}</NameStromerzeugungseinheit>
     <Inbetriebnahmedatum>2021-06-30</Inbetriebnahmedatum>
     <Gemeinde>Bergkirchen</Gemeinde>
@@ -63,6 +68,9 @@ def built_db(tmp_path_factory):
         _unit("SEE900000000004", status=31),                        # shut down -> drop
         _unit("SEE900000000005", lat=None, lon=None),               # no coords -> drop
         _unit("SEE900000000006", hectares=None, park=None),         # keep, no area
+        _unit("SEE900000000007", usage=713),                        # Haushalt -> private
+        _unit("SEE900000000008", usage=714),                        # Landwirtschaft -> commercial
+        _unit("SEE900000000009", usage=715),                        # Industrie -> commercial
     ])
     with zipfile.ZipFile(archive, "w") as z:
         z.writestr("Katalogwerte.xml", CATALOG)
@@ -79,7 +87,26 @@ class TestExtractor:
     def test_only_ground_mounted_operating_units_with_coords_are_kept(self, built_db):
         conn = sqlite3.connect(built_db)
         ids = {r[0] for r in conn.execute("SELECT mastr_id FROM units")}
-        assert ids == {"SEE900000000001", "SEE900000000002", "SEE900000000006"}
+        assert ids == {
+            "SEE900000000001", "SEE900000000002", "SEE900000000006",
+            "SEE900000000007", "SEE900000000008", "SEE900000000009",
+        }
+
+    def test_household_units_are_marked_private(self, built_db):
+        """Only a private household is non-commercial; farming and industry are businesses."""
+        conn = sqlite3.connect(built_db)
+        got = dict(conn.execute("SELECT mastr_id, commercial FROM units"))
+        assert got["SEE900000000007"] == 0   # Haushalt
+        assert got["SEE900000000008"] == 1   # Landwirtschaft
+        assert got["SEE900000000009"] == 1   # Industrie
+
+    def test_unclassified_units_are_kept_as_commercial(self, built_db):
+        """A blank usage field is not evidence of a private installation."""
+        conn = sqlite3.connect(built_db)
+        row = conn.execute(
+            "SELECT usage, commercial FROM units WHERE mastr_id='SEE900000000001'"
+        ).fetchone()
+        assert row == (None, 1)
 
     def test_hectares_converted_to_square_metres(self, built_db):
         conn = sqlite3.connect(built_db)
@@ -113,8 +140,8 @@ class TestStore:
     def test_bbox_query(self, built_db):
         store = mastr.MastrStore(built_db)
         assert store.available()
-        # All three kept units sit around Bergkirchen.
-        assert len(store.query_bbox(48.25, 11.27, 48.27, 11.30)) == 3
+        # All six kept units sit around Bergkirchen.
+        assert len(store.query_bbox(48.25, 11.27, 48.27, 11.30)) == 6
         # Only Feld 2 lies in this narrower western box.
         west = store.query_bbox(48.255, 11.285, 48.262, 11.295)
         assert [u.mastr_id for u in west] == ["SEE900000000002"]
@@ -123,7 +150,7 @@ class TestStore:
     def test_query_tiles_deduplicates_overlaps(self, built_db):
         store = mastr.MastrStore(built_db)
         overlapping = [(48.20, 11.20, 48.30, 11.35), (48.25, 11.25, 48.35, 11.40)]
-        assert len(store.query_tiles(overlapping)) == 3
+        assert len(store.query_tiles(overlapping)) == 6
 
     def test_park_name_preferred_over_unit_name(self, built_db):
         store = mastr.MastrStore(built_db)

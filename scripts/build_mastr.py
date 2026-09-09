@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import sqlite3
+from collections import Counter
 import sys
 import xml.etree.ElementTree as ET
 import zipfile
@@ -33,6 +34,12 @@ DEFAULT_OUT = REPO_ROOT / "data" / "mastr_solar.sqlite3"
 GROUND_MOUNTED = "Freiflächensolaranlage"
 IN_OPERATION = "In Betrieb"
 SOLAR_ENERGY = "Solare Strahlungsenergie"
+
+# `Nutzungsbereich` says who the unit serves. Everything except a private
+# household counts as commercial -- farming, industry and trade are all
+# businesses. Units that leave the field blank are kept: absence of a
+# classification is not evidence of a private one.
+PRIVATE_USAGE = {"Haushalt"}
 
 
 def _text(elem: ET.Element, tag: str) -> str | None:
@@ -129,11 +136,14 @@ def build(zip_path: Path, out_path: Path, states: set[str] | None = None) -> Non
              commissioned TEXT,
              municipality TEXT,
              district TEXT,
-             state TEXT
+             state TEXT,
+             usage TEXT,
+             commercial INTEGER NOT NULL
            )"""
     )
 
     seen = kept = no_coords = 0
+    usage_counts: Counter[str] = Counter()
     batch: list[tuple] = []
     for filename in files:
         with archive.open(filename) as stream:
@@ -170,6 +180,8 @@ def build(zip_path: Path, out_path: Path, states: set[str] | None = None) -> Non
                     continue
 
                 hectares = _float(elem, "GroesseDerInAnspruchGenommenenFlaecheInHektar")
+                usage = catalog.get(_int(elem, "Nutzungsbereich"))
+                usage_counts[usage or "(unset)"] += 1
                 batch.append(
                     (
                         _text(elem, "EinheitMastrNummer"),
@@ -183,6 +195,8 @@ def build(zip_path: Path, out_path: Path, states: set[str] | None = None) -> Non
                         _text(elem, "Gemeinde"),
                         _text(elem, "Landkreis"),
                         state,
+                        usage,
+                        0 if usage in PRIVATE_USAGE else 1,
                     )
                 )
                 kept += 1
@@ -190,12 +204,12 @@ def build(zip_path: Path, out_path: Path, states: set[str] | None = None) -> Non
 
                 if len(batch) >= 5_000:
                     conn.executemany(
-                        "INSERT OR REPLACE INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)", batch
+                        "INSERT OR REPLACE INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", batch
                     )
                     batch.clear()
 
     if batch:
-        conn.executemany("INSERT OR REPLACE INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?)", batch)
+        conn.executemany("INSERT OR REPLACE INTO units VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)", batch)
 
     if kept == 0:
         conn.close()
@@ -217,13 +231,20 @@ def build(zip_path: Path, out_path: Path, states: set[str] | None = None) -> Non
     with_area = conn.execute(
         "SELECT COUNT(*) FROM units WHERE area_m2 IS NOT NULL"
     ).fetchone()[0]
+    commercial = conn.execute("SELECT COUNT(*) FROM units WHERE commercial = 1").fetchone()[0]
     conn.close()
+
+    print("\nNutzungsbereich (usage) of the kept ground-mount units:")
+    for label, n in usage_counts.most_common():
+        mark = "private" if label in PRIVATE_USAGE else "commercial"
+        print(f"   {label:<45} {n:>6}  -> {mark}")
 
     print(
         f"\nscanned {seen:,} solar units\n"
         f"  kept {kept:,} ground-mounted, in operation, with coordinates\n"
         f"  skipped {no_coords:,} ground-mounted units that withhold coordinates\n"
         f"  {with_area:,} of the kept units declare a land area\n"
+        f"  {commercial:,} classified commercial, {kept - commercial:,} private\n"
         f"wrote {out_path} ({out_path.stat().st_size / 1e6:.1f} MB)"
     )
 
