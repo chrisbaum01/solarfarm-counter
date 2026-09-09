@@ -13,13 +13,13 @@ def _store(tmp_path, rows, with_commercial=False):
     """Build a throwaway extract in the same shape build_mastr.py writes."""
     path = tmp_path / "mastr.sqlite3"
     conn = sqlite3.connect(path)
-    extra = ", commercial INTEGER" if with_commercial else ""
+    extra = ", usage TEXT, commercial INTEGER" if with_commercial else ""
     conn.execute(
         "CREATE TABLE units (mastr_id TEXT PRIMARY KEY, lat REAL, lon REAL, name TEXT,"
         f" park_name TEXT, capacity_kw REAL, area_m2 REAL, commissioned TEXT,"
         f" municipality TEXT, district TEXT, state TEXT{extra})"
     )
-    n = 11 + (1 if with_commercial else 0)
+    n = 11 + (2 if with_commercial else 0)
     conn.executemany(f"INSERT INTO units VALUES ({','.join('?' * n)})", rows)
     conn.execute("CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT)")
     conn.execute("INSERT INTO meta VALUES ('source','test.zip')")
@@ -28,10 +28,10 @@ def _store(tmp_path, rows, with_commercial=False):
     return MastrStore(path)
 
 
-def _unit(uid, lat, lon, kw, state, commercial=None):
+def _unit(uid, lat, lon, kw, state, commercial=None, usage=None):
     row = [uid, lat, lon, "u", None, kw, None, "2021-01-01", "Ort", "Kreis", state]
     if commercial is not None:
-        row.append(commercial)
+        row.extend([usage, commercial])
     return tuple(row)
 
 
@@ -138,10 +138,24 @@ class TestCommercialFlag:
 
     def test_flag_present_filters_private_units(self, tmp_path):
         rows = [
-            _unit("A", 48.5, 11.5, 900, "Bayern", commercial=1),
-            _unit("B", 49.5, 12.5, 900, "Bayern", commercial=0),
+            _unit("A", 48.5, 11.5, 900, "Bayern", commercial=1, usage="Industrie"),
+            _unit("B", 49.5, 12.5, 900, "Bayern", commercial=0, usage="Haushalt"),
         ]
         store = _store(tmp_path, rows, with_commercial=True)
         r = state_statistics(store)
         assert r["commercial_filter"] is True
         assert r["totals"]["units"] == 1
+
+    def test_sparsely_populated_usage_field_is_not_claimed_as_a_filter(self, tmp_path):
+        """The real register sets this field for 0.19% of ground-mount units.
+
+        Reporting the count as "classified commercial by the register" would be
+        false when almost nothing was classified.
+        """
+        rows = [_unit(f"S{i}", 48.0 + i * 0.05, 11.0 + i * 0.05, 900, "Bayern",
+                      commercial=1, usage="Industrie" if i == 0 else None)
+                for i in range(100)]
+        r = state_statistics(_store(tmp_path, rows, with_commercial=True))
+        assert r["usage_coverage_pct"] == pytest.approx(1.0)
+        assert r["commercial_filter"] is False, "must not claim a filter that did not run"
+        assert r["totals"]["units"] == 100  # nothing dropped on an unusable field

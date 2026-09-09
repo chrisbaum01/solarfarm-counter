@@ -109,12 +109,21 @@ def state_statistics(
     # calling this inside the `with` block deadlocks.
     has_commercial = _has_commercial(store)
     query = (
-        "SELECT lat, lon, capacity_kw, state, commercial FROM units"
+        "SELECT lat, lon, capacity_kw, state, commercial, usage FROM units"
         if has_commercial
-        else "SELECT lat, lon, capacity_kw, state, NULL FROM units"
+        else "SELECT lat, lon, capacity_kw, state, NULL, NULL FROM units"
     )
     with store._lock:  # noqa: SLF001 - same module family, read-only query
         rows = store._connect().execute(query).fetchall()  # noqa: SLF001
+
+    # The registry's Nutzungsbereich turns out to be almost never set for
+    # ground-mount units (0.19% of them): it describes the consumption side, and
+    # a park feeding the grid has none. Claiming the register classified these
+    # as commercial would be false, so report the coverage and let the caller
+    # describe the filter honestly.
+    usage_known = sum(1 for r in rows if r[5] is not None)
+    usage_coverage = usage_known / len(rows) if rows else 0.0
+    classification_usable = has_commercial and usage_coverage >= 0.5
 
     units = [
         (r[0], r[1], r[2] or 0.0, r[3])
@@ -182,7 +191,8 @@ def state_statistics(
         },
         "params": {"min_kw": min_kw, "link_m": link_m},
         "source": store.meta().get("source", "unknown"),
-        "commercial_filter": has_commercial,
+        "commercial_filter": classification_usable,
+        "usage_coverage_pct": round(100 * usage_coverage, 2),
     }
 
 

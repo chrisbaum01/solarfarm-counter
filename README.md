@@ -117,11 +117,45 @@ area nor a registry entry** is weak evidence and is left out. Every exclusion is
 candidate sitting on one. It is off by default because it costs an extra Overpass request per 20
 candidates, which is slow and unkind to a free service.
 
+## Per-state analysis
+
+Below the map is a national comparison of commercial ground-mounted solar parks, one row per
+federal state, computed from the local registry extract (no network, ~50 ms):
+
+| | Brandenburg | Bayern | Nordrhein-Westfalen |
+| --- | --- | --- | --- |
+| Parks / 1000 km² | 23.2 | **46.1** | 17.1 |
+| MW / 1000 km² | **242.0** | 206.2 | 42.4 |
+| Median park | 3.21 MW | 2.30 MW | 0.92 MW |
+| Largest park | 180.4 MW | 96.7 MW | 38.3 MW |
+
+The two densities tell different stories: Bayern has by far the most parks per unit area, but
+Brandenburg leads on capacity because its parks are larger. Germany overall runs at **26.1 parks
+and 128.6 MW per 1000 km²**.
+
+Sort by any column. Definitions:
+
+- **Ground-mounted only** (`Freiflächensolaranlage`), so rooftop, facade and balcony units are
+  excluded by the register's own classification.
+- **Under 100 kW dropped** as farm self-supply: ~1,200 units, but only 0.3% of capacity. This size
+  proxy is what actually separates commercial from private, because the register's own
+  classification cannot: `Nutzungsbereich` is set for just **0.19%** of ground-mount units. That
+  field describes the consumption side, and a park feeding the grid has none. The extractor still
+  reads it, and the analysis will use it automatically if coverage ever rises above 50% — until
+  then the app says which test really ran rather than implying the register classified anything.
+- **A "park" is a site, not a register row.** Units within 300 m merge, the same rule used for
+  routes. 14,824 qualifying units are 9,336 distinct parks; counting rows would overstate density
+  by roughly 60%.
+
+State areas come from the Statistisches Bundesamt and are listed explicitly in `app/analysis.py` —
+a wrong one would silently skew a single row, so a test pins their sum to Germany's area.
+
 ## API
 
 ```
 GET /api/search?from=München&to=Nürnberg
 GET /api/search?from=Hamburg&to=Berlin&corridor_m=1000&min_area_m2=20000
+GET /api/states                 per-state analysis (no network)
 GET /api/health
 ```
 
@@ -208,7 +242,7 @@ flagged, rather than being silently dropped by the size filter or counted as zer
 pytest
 ```
 
-114 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
+133 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
 `tests/fixtures/`, including regression checks pinning the real München → Nürnberg counts.
 CI runs them on Python 3.10 through 3.13.
 

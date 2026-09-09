@@ -429,9 +429,13 @@ async function loadStates() {
       <td class="num">100%</td><td class="num">100%</td>
     </tr>`;
 
+    // Say which test actually ran. The register's usage field is almost never
+    // set for ground-mount units, so claiming it classified them would be false.
     const filter = d.commercial_filter
       ? 'classified as commercial in the register'
-      : 'above ' + d.params.min_kw + ' kW (a size proxy for commercial use)';
+      : 'above ' + d.params.min_kw + ' kW, a size proxy for commercial use — the '
+        + 'register\'s own usage field is set for only '
+        + (d.usage_coverage_pct ?? 0) + '% of these units, so it cannot be used';
     $('states-note').textContent =
       `Ground-mounted (Freiflächen) units only, ${filter}. Units within `
       + `${d.params.link_m} m of each other count as one park, the same rule used for routes. `
