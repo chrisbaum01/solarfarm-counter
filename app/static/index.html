@@ -368,11 +368,10 @@ function currentParams() {
   if (document.readyState !== 'loading') $('form').requestSubmit();
 })();
 
-$('form').onsubmit = async ev => {
+$('form').onsubmit = ev => {
   ev.preventDefault();
   const btn = $('go');
   btn.disabled = true;
-  btn.innerHTML = '<span class="spinner"></span>Counting…';
   $('result-card').style.display = '';
   $('headline').style.display = 'none';
   $('error').style.display = 'none';
@@ -380,29 +379,64 @@ $('form').onsubmit = async ev => {
 
   const qs = new URLSearchParams(currentParams());
   history.replaceState(null, '', '?' + qs);
-  // The server caps a search at 5 minutes; give it a little slack, then stop
-  // waiting rather than leaving the spinner running forever.
-  const abort = new AbortController();
-  const timer = setTimeout(() => abort.abort(), 320000);
-  try {
-    const r = await fetch('/api/search?' + qs, { signal: abort.signal });
-    const data = await r.json();
-    if (!r.ok) throw new Error(data.detail || `Request failed (${r.status})`);
-    render(data);
-  } catch (err) {
+
+  const setStatus = t => { btn.innerHTML = `<span class="spinner"></span>${t}`; };
+  setStatus('Starting…');
+
+  // Server-sent events, so a cold search shows real progress instead of a
+  // spinner that is indistinguishable from a hung request.
+  const es = new EventSource('/api/search/stream?' + qs);
+  let settled = false;
+
+  const finish = () => {
+    if (settled) return;
+    settled = true;
+    clearTimeout(timer);
+    es.close();
+    btn.disabled = false;
+    btn.textContent = 'Count';
+  };
+
+  const fail = msg => {
     $('error').style.display = 'block';
-    $('error').textContent = err.name === 'AbortError'
-      ? 'The search took longer than 5 minutes and was stopped. Map data already '
-        + 'fetched has been cached, so running it again will get further.'
-      : err.message;
+    $('error').textContent = msg;
     $('headline').style.display = 'none';
     $('chips').innerHTML = ''; $('resolved').textContent = '';
     $('warnings').innerHTML = ''; $('stats').textContent = '';
-  } finally {
-    clearTimeout(timer);
-    btn.disabled = false;
-    btn.textContent = 'Count';
-  }
+    finish();
+  };
+
+  const timer = setTimeout(() => fail(
+    'The search took longer than 5 minutes and was stopped. Map data already '
+    + 'fetched has been cached, so running it again will get further.'), 320000);
+
+  const PHASES = {
+    geocoding: 'Looking up cities…',
+    routing: 'Finding the route…',
+    tiles: 'Fetching map data…',
+    analysing: 'Counting parks…',
+  };
+
+  es.addEventListener('progress', e => {
+    const p = JSON.parse(e.data);
+    let text = PHASES[p.phase] || 'Working…';
+    if (p.phase === 'tiles' && p.total) text = `Map data ${p.done}/${p.total}…`;
+    setStatus(text);
+  });
+
+  es.addEventListener('result', e => {
+    render(JSON.parse(e.data));
+    finish();
+  });
+
+  es.addEventListener('error', e => {
+    // A payload means the server reported a real failure; no payload means the
+    // connection itself dropped.
+    if (e.data) { try { fail(JSON.parse(e.data).detail); return; } catch (_) {} }
+    if (!settled) fail('Lost connection to the server.');
+  });
+
+  es.onerror = () => { if (!settled) fail('Lost connection to the server.'); };
 };
 </script>
 </body>

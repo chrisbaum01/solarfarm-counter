@@ -13,6 +13,17 @@ from .geometry import LonLat
 # OSRM reports road references like "A 9", "A9", or "A 9; B 2" for concurrencies.
 _AUTOBAHN_RE = re.compile(r"(?:^|;)\s*A\s?\d+", re.IGNORECASE)
 _BUNDESSTRASSE_RE = re.compile(r"(?:^|;)\s*B\s?\d+", re.IGNORECASE)
+# Signage text, e.g. "A 8, A 81: Karlsruhe, Heilbronn". The road references come
+# before the colon; the places after it are only where the road leads.
+_DESTINATION_REF_RE = re.compile(r"\bA\s?\d+", re.IGNORECASE)
+
+# When OSRM omits `ref` entirely, `destinations` is the remaining clue. On its
+# own it is not enough: a short slip road onto the A3 is signed for the A3 but
+# is not the Autobahn. Speed and length separate the two -- on Stuttgart ->
+# Karlsruhe the real A8 stretch runs 60.5 km at 91 km/h, while the ramp signed
+# "A 3, A 73" is 0.8 km at 64 km/h.
+_MIN_MOTORWAY_KMH = 80.0
+_MIN_MOTORWAY_M = 2_000.0
 
 
 class RoutingError(RuntimeError):
@@ -42,11 +53,34 @@ def _normalise_ref(ref: str) -> str:
     return f"A {digits}"
 
 
+def _looks_like_motorway(step: dict) -> str | None:
+    """Motorway reference inferred from signage, or None.
+
+    Used only where `ref` is missing. OSRM sometimes collapses a whole motorway
+    stretch into one unreferenced step -- Stuttgart -> Karlsruhe returns the
+    entire 60.5 km A8 with no `ref` at all, which silently reduced the scanned
+    distance to 3.7 km of the 80 km trip.
+    """
+    destinations = step.get("destinations") or ""
+    head = destinations.split(":", 1)[0]  # refs precede the colon
+    match = _DESTINATION_REF_RE.search(head)
+    if not match:
+        return None
+
+    distance = step.get("distance", 0.0)
+    duration = step.get("duration", 0.0)
+    if distance < _MIN_MOTORWAY_M or duration <= 0:
+        return None
+    if (distance / duration) * 3.6 < _MIN_MOTORWAY_KMH:
+        return None
+    return _normalise_ref(match.group(0))
+
+
 def extract_runs(steps: list[dict], include_bundesstrasse: bool = False) -> Route:
     """Pull the motorway portions out of an OSRM leg's steps.
 
-    OSRM tags each step with the road's `ref`, which is what makes Autobahn-only
-    scanning exact rather than heuristic -- no map matching required.
+    OSRM usually tags each step with the road's `ref`, which makes Autobahn-only
+    scanning exact. Where that is missing, signage plus speed stands in.
     """
     polylines: list[list[LonLat]] = []
     current: list[LonLat] = []
@@ -58,6 +92,10 @@ def extract_runs(steps: list[dict], include_bundesstrasse: bool = False) -> Rout
         is_match = bool(_AUTOBAHN_RE.search(ref)) or (
             include_bundesstrasse and bool(_BUNDESSTRASSE_RE.search(ref))
         )
+        if not is_match:
+            inferred = _looks_like_motorway(step)
+            if inferred:
+                ref, is_match = inferred, True
         if not is_match:
             if current:
                 polylines.append(current)

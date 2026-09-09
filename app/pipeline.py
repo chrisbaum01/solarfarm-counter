@@ -76,7 +76,12 @@ def candidate_points(
     ]
 
 
-async def search(origin: str, destination: str, params: SearchParams) -> dict:
+async def search(
+    origin: str,
+    destination: str,
+    params: SearchParams,
+    progress: "callable | None" = None,
+) -> dict:
     """Full pipeline: geocode -> route -> Overpass tiles -> filter -> cluster.
 
     The whole search is bounded by `config.SEARCH_TIMEOUT_SECONDS`. Geocoding and
@@ -89,9 +94,15 @@ async def search(origin: str, destination: str, params: SearchParams) -> dict:
     deadline = asyncio.get_running_loop().time() + config.SEARCH_TIMEOUT_SECONDS
     warnings: list[str] = []
 
+    def emit(phase: str, done: int = 0, total: int = 0) -> None:
+        if progress:
+            progress({"phase": phase, "done": done, "total": total})
+
+    emit("geocoding")
     start = await geocode.geocode(origin)
     end = await geocode.geocode(destination)
 
+    emit("routing")
     route = await routing.route(
         (start.lat, start.lon),
         (end.lat, end.lon),
@@ -122,7 +133,12 @@ async def search(origin: str, destination: str, params: SearchParams) -> dict:
         }
 
     tiles = bbox_tiles(route.polylines, params.corridor_m, config.TILE_DEG)
-    elements, tile_stats = await overpass.fetch_solar_features(tiles, deadline=deadline)
+    emit("tiles")
+    elements, tile_stats = await overpass.fetch_solar_features(
+        tiles,
+        progress=lambda done, total: emit("tiles", done, total),
+        deadline=deadline,
+    )
 
     # Both sources go through one clustering pass, so a park present in each is
     # merged rather than counted twice.
@@ -154,6 +170,7 @@ async def search(origin: str, destination: str, params: SearchParams) -> dict:
                 "carry no rooftop tag may still be counted."
             )
 
+    emit("analysing")
     parks, stats = analyse_route(route, elements, params, buildings)
 
     by_source = {"osm_only": 0, "mastr_only": 0, "both": 0}

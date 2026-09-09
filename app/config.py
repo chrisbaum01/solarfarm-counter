@@ -93,3 +93,7 @@ OVERPASS_BACKOFF_SECONDS = [5.0, 15.0, 30.0, 60.0, 90.0]
 OVERPASS_MAX_RETRIES = len(OVERPASS_BACKOFF_SECONDS)
 # Overpass fair use allows very few concurrent slots per client.
 OVERPASS_CONCURRENCY = 2
+# If a mirror has not answered within this, fire at the next one alongside it
+# and take whichever replies first. Measured mirror latencies ranged from
+# sub-second to 176 s, so waiting out the slow one is the dominant cost.
+OVERPASS_HEDGE_AFTER_S = 12.0

@@ -5,12 +5,81 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import logging
+import time
 
 import httpx
 
 from . import cache, config
+from .endpoints import EndpointPool
 
 log = logging.getLogger(__name__)
+
+# Shared across requests so health learned on one search benefits the next.
+POOL = EndpointPool(list(config.OVERPASS_ENDPOINTS))
+
+
+async def _post(client: httpx.AsyncClient, url: str, query: str) -> list[dict]:
+    """One Overpass request. Raises on a retryable status."""
+    resp = await client.post(url, data={"data": query})
+    if resp.status_code in (429, 502, 503, 504):
+        raise OverpassError(f"HTTP {resp.status_code} from {url}")
+    resp.raise_for_status()
+    return resp.json().get("elements", [])
+
+
+async def _post_hedged(
+    client: httpx.AsyncClient, query: str, worker: int
+) -> tuple[list[dict], str]:
+    """Try mirrors in health order, hedging onto the next if one stalls.
+
+    A mirror that has not answered within the hedge delay is not abandoned --
+    a second request goes out alongside it and whichever replies first wins.
+    That turns one slow mirror into a delay rather than the whole cost.
+    """
+    order = POOL.order_for(worker)
+    last_error: Exception | None = None
+    pending: dict[asyncio.Task, tuple[str, float]] = {}
+
+    try:
+        for index, url in enumerate(order[: config.OVERPASS_MAX_RETRIES]):
+            task = asyncio.ensure_future(_post(client, url, query))
+            pending[task] = (url, time.monotonic())
+
+            while pending:
+                done, _ = await asyncio.wait(
+                    pending.keys(),
+                    timeout=config.OVERPASS_HEDGE_AFTER_S,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if not done:
+                    break  # nothing yet: widen to the next mirror
+
+                for finished in done:
+                    url_done, started = pending.pop(finished)
+                    elapsed = time.monotonic() - started
+                    try:
+                        elements = finished.result()
+                    except (OverpassError, httpx.HTTPError, ValueError) as exc:
+                        last_error = exc
+                        POOL.record_failure(url_done, elapsed)
+                        log.warning("overpass %s failed after %.1fs: %s", url_done, elapsed, exc)
+                    else:
+                        POOL.record_success(url_done, elapsed)
+                        return elements, url_done
+                if not pending:
+                    break  # every in-flight attempt failed; escalate to the next
+
+            if index + 1 < len(order):
+                await asyncio.sleep(config.OVERPASS_BACKOFF_SECONDS[
+                    min(index, len(config.OVERPASS_BACKOFF_SECONDS) - 1)
+                ] if not pending else 0)
+    finally:
+        for task in pending:
+            task.cancel()
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)
+
+    raise OverpassError("all Overpass mirrors failed") from last_error
 
 # `out geom` rather than `out tags center`: geometry comes back in the same
 # round-trip, so cluster areas need no second pass over the same features.
@@ -64,7 +133,7 @@ async def fetch_buildings_near(
 
     async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT, headers=headers) as client:
 
-        async def one(batch: list[tuple[float, float]]):
+        async def one(batch: list[tuple[float, float]], worker: int):
             key = _buildings_key(batch, radius_m)
             cached = cache.get(key, config.TILE_TTL_SECONDS)
             if cached is not None:
@@ -77,30 +146,17 @@ async def fetch_buildings_near(
                 f"out geom;"
             )
             async with semaphore:
-                for attempt in range(config.OVERPASS_MAX_RETRIES):
-                    endpoint = config.OVERPASS_ENDPOINTS[
-                        attempt % len(config.OVERPASS_ENDPOINTS)
-                    ]
-                    try:
-                        resp = await client.post(endpoint, data={"data": query})
-                        if resp.status_code in (429, 502, 503, 504):
-                            await asyncio.sleep(config.OVERPASS_BACKOFF_SECONDS[attempt])
-                            continue
-                        resp.raise_for_status()
-                        found = [
-                            [(p["lat"], p["lon"]) for p in el["geometry"]]
-                            for el in resp.json().get("elements", [])
-                            if el.get("geometry")
-                        ]
-                        cache.put(key, found)
-                        return found
-                    except (httpx.HTTPError, ValueError) as exc:
-                        log.warning("building lookup failed on %s: %s", endpoint, exc)
-                        await asyncio.sleep(config.OVERPASS_BACKOFF_SECONDS[attempt])
-            raise OverpassError("building batch failed")
+                elements, _ = await _post_hedged(client, query, worker)
+                found = [
+                    [(p["lat"], p["lon"]) for p in el["geometry"]]
+                    for el in elements
+                    if el.get("geometry")
+                ]
+                cache.put(key, found)
+                return found
 
         results = await asyncio.gather(
-            *(one(b) for b in batches), return_exceptions=True
+            *(one(b, i) for i, b in enumerate(batches)), return_exceptions=True
         )
 
     for result in results:
@@ -126,34 +182,13 @@ class OverpassTimeout(OverpassError):
 
 
 async def _fetch_tile(
-    client: httpx.AsyncClient, tile: tuple[float, float, float, float]
+    client: httpx.AsyncClient,
+    tile: tuple[float, float, float, float],
+    worker: int = 0,
 ) -> tuple[list[dict], str]:
     s, w, n, e = tile
     query = _QUERY_TEMPLATE.format(s=s, w=w, n=n, e=e)
-
-    last_error: Exception | None = None
-    for attempt in range(config.OVERPASS_MAX_RETRIES):
-        # Rotate endpoints across attempts so a single overloaded mirror does
-        # not sink the whole request.
-        endpoint = config.OVERPASS_ENDPOINTS[attempt % len(config.OVERPASS_ENDPOINTS)]
-        wait = config.OVERPASS_BACKOFF_SECONDS[attempt]
-        try:
-            resp = await client.post(endpoint, data={"data": query})
-            if resp.status_code in (429, 502, 503, 504):
-                log.warning(
-                    "overpass %s from %s, retrying in %.0fs", resp.status_code, endpoint, wait
-                )
-                last_error = OverpassError(f"HTTP {resp.status_code} from {endpoint}")
-                await asyncio.sleep(wait)
-                continue
-            resp.raise_for_status()
-            return resp.json().get("elements", []), endpoint
-        except (httpx.HTTPError, ValueError) as exc:
-            last_error = exc
-            log.warning("overpass request to %s failed: %s", endpoint, exc)
-            await asyncio.sleep(wait)
-
-    raise OverpassError(f"all Overpass attempts failed for tile {tile}") from last_error
+    return await _post_hedged(client, query, worker)
 
 
 async def fetch_solar_features(
@@ -187,10 +222,10 @@ async def fetch_solar_features(
         headers = {"User-Agent": config.USER_AGENT}
         async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT, headers=headers) as client:
 
-            async def one(tile):
+            async def one(tile, worker: int):
                 nonlocal completed
                 async with semaphore:
-                    result, endpoint = await _fetch_tile(client, tile)
+                    result, endpoint = await _fetch_tile(client, tile, worker)
                     # Record the source. An empty tile is otherwise
                     # indistinguishable from one a broken mirror emptied.
                     cache.put(_tile_key(tile), {"endpoint": endpoint, "elements": result})
@@ -203,7 +238,7 @@ async def fetch_solar_features(
             # that did come back. Failures are counted and surfaced to the
             # caller, which reports the count as a lower bound -- quietly
             # returning a short count would read as a complete answer.
-            tasks = [asyncio.ensure_future(one(t)) for t in misses]
+            tasks = [asyncio.ensure_future(one(t, i)) for i, t in enumerate(misses)]
             remaining = None
             if deadline is not None:
                 remaining = max(0.0, deadline - asyncio.get_running_loop().time())

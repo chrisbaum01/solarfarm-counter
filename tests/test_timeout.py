@@ -19,7 +19,7 @@ def isolate_cache(tmp_path, monkeypatch):
 
 
 def _slow_fetch(delay: float):
-    async def fake(client, tile):
+    async def fake(client, tile, worker=0):
         await asyncio.sleep(delay)
         return [{"type": "way", "id": int(tile[0] * 1000), "tags": {}, "geometry": []}], "test"
     return fake
@@ -77,7 +77,7 @@ async def test_partial_completion_keeps_what_finished(monkeypatch):
     """A slow tile must not discard the fast ones that already returned."""
     calls = {"n": 0}
 
-    async def mixed(client, tile):
+    async def mixed(client, tile, worker=0):
         calls["n"] += 1
         if calls["n"] == 1:
             return [{"type": "way", "id": 1, "tags": {}, "geometry": []}], "test"

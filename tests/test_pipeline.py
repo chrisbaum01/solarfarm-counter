@@ -43,6 +43,63 @@ class TestAutobahnExtraction:
         ]
         assert len(extract_runs(steps).polylines) == 2
 
+    def test_unreferenced_motorway_recovered_from_signage(self):
+        """OSRM sometimes returns a whole motorway stretch with no `ref`.
+
+        Stuttgart -> Karlsruhe came back with the entire 60.5 km A8 unreferenced,
+        which cut the scanned distance to 3.7 km of an 80 km trip.
+        """
+        steps = [{
+            "ref": "", "destinations": "A 8, A 81: Karlsruhe, Heilbronn",
+            "distance": 60_500, "duration": 2_400,  # ~91 km/h
+            "geometry": {"coordinates": [[9.07, 48.72], [8.60, 48.90]]},
+        }]
+        result = extract_runs(steps)
+        assert result.refs == ["A 8"]
+        assert result.matched_km == pytest.approx(60.5)
+
+    def test_slip_road_signed_for_a_motorway_is_not_counted(self):
+        """A ramp onto the A3 is signed for the A3 but is not the Autobahn."""
+        steps = [{
+            "ref": "", "destinations": "A 3, A 73: Wurzburg, Bamberg",
+            "distance": 800, "duration": 45,  # 0.8 km at 64 km/h
+            "geometry": {"coordinates": [[11.0, 49.0], [11.01, 49.0]]},
+        }]
+        assert extract_runs(steps).refs == []
+
+    def test_long_but_slow_step_is_not_a_motorway(self):
+        steps = [{
+            "ref": "", "destinations": "A 8: Stuttgart",
+            "distance": 5_000, "duration": 400,  # 45 km/h
+            "geometry": {"coordinates": [[9.0, 48.7], [9.1, 48.7]]},
+        }]
+        assert extract_runs(steps).refs == []
+
+    def test_destinations_naming_only_places_is_ignored(self):
+        steps = [{
+            "ref": "", "destinations": "Boblingen, Stuttgart-Vaihingen",
+            "distance": 60_000, "duration": 2_400,
+            "geometry": {"coordinates": [[9.0, 48.7], [9.1, 48.7]]},
+        }]
+        assert extract_runs(steps).refs == []
+
+    def test_places_after_the_colon_cannot_trigger_a_match(self):
+        """Only the refs before the colon count, not the places after it."""
+        steps = [{
+            "ref": "", "destinations": "Ausfahrt: A-Dorf, Altstadt",
+            "distance": 60_000, "duration": 2_400,
+            "geometry": {"coordinates": [[9.0, 48.7], [9.1, 48.7]]},
+        }]
+        assert extract_runs(steps).refs == []
+
+    def test_explicit_ref_still_wins(self):
+        steps = [{
+            "ref": "A 9", "destinations": "A 73: Nurnberg",
+            "distance": 10_000, "duration": 340,
+            "geometry": {"coordinates": [[11.0, 49.0], [11.1, 49.0]]},
+        }]
+        assert extract_runs(steps).refs == ["A 9"]
+
     def test_bundesstrasse_opt_in(self):
         steps = [
             {"ref": "B 2", "distance": 5000, "geometry": {"coordinates": [[11.0, 49.0], [11.01, 49.0]]}},

@@ -125,6 +125,11 @@ GET /api/search?from=Hamburg&to=Berlin&corridor_m=1000&min_area_m2=20000
 GET /api/health
 ```
 
+There is also `GET /api/search/stream`, the same search as server-sent events. It emits `progress`
+events (`geocoding`, `routing`, `tiles` with done/total, `analysing`) and then a single `result` or
+`error`. The UI uses it, so a cold search shows "Map data 7/23…" rather than a spinner that looks
+identical to a hung request.
+
 Interactive docs at `/docs`. The UI mirrors its state into the URL, so any search can be
 bookmarked or shared.
 
@@ -161,6 +166,20 @@ corridor.
 between routes — München → Nürnberg and München → Berlin reuse the same A 9 tiles. An early
 prototype using route-shaped boxes took 215 s and was repeatedly rate-limited.
 
+**Motorway detection falls back to signage when OSRM omits `ref`.** OSRM usually labels each step
+with its road reference, which makes extraction exact. Sometimes it does not: Stuttgart → Karlsruhe
+returns the entire 60.5 km A 8 as one step with no `ref` at all, which cut the scanned distance to
+3.7 km of an 80 km trip. Where `ref` is missing, the step's `destinations` signage is used instead —
+but only when the step is over 2 km and averages 80 km/h or more, so a slip road signed for the A 3
+is not mistaken for the A 3 itself. That route now scans 64.2 km.
+
+**Mirrors are chosen by measured health, not by list order.** Public Overpass instances vary wildly
+and unpredictably: within one minute, overpass-api.de refused connections outright while
+kumi.systems answered real tile queries in 38–176 s. Each mirror's recent latency and failures are
+tracked; requests go to whichever is actually working, concurrent tiles start on different mirrors
+rather than queueing behind the fastest, and a mirror that stalls for 12 s is hedged — a second
+request goes out alongside it and the first reply wins.
+
 **Overpass mirrors must have global coverage.** A regional instance answers an out-of-area
 query with HTTP 200 and zero elements — indistinguishable from "no solar farms here", and it gets
 cached as fact. `overpass.osm.ch` was briefly in the fallback list and does exactly that: Zurich
@@ -178,7 +197,7 @@ flagged, rather than being silently dropped by the size filter or counted as zer
 pytest
 ```
 
-90 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
+114 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
 `tests/fixtures/`, including regression checks pinning the real München → Nürnberg counts.
 CI runs them on Python 3.10 through 3.13.
 

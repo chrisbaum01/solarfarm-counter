@@ -39,7 +39,7 @@ class TestTileProvenance:
     @pytest.mark.asyncio
     async def test_cached_tile_records_which_endpoint_served_it(self, monkeypatch):
         """An empty tile must be attributable to a mirror after the fact."""
-        async def fake(client, tile):
+        async def fake(client, tile, worker=0):
             return [], "https://example.test/api/interpreter"
 
         monkeypatch.setattr(overpass, "_fetch_tile", fake)
@@ -52,7 +52,7 @@ class TestTileProvenance:
 
     @pytest.mark.asyncio
     async def test_cached_tiles_are_read_back(self, monkeypatch):
-        async def fake(client, tile):
+        async def fake(client, tile, worker=0):
             return [{"type": "way", "id": 7, "tags": {}, "geometry": []}], "ep"
 
         monkeypatch.setattr(overpass, "_fetch_tile", fake)
