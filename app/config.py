@@ -15,6 +15,16 @@ DEFAULT_MIN_AREA_M2 = 10_000.0  # clusters smaller than this are not "parks"
 
 # Guard rails so a hand-edited query cannot ask for something absurd.
 MAX_CORRIDOR_M = 5_000.0
+# How far from a building outline a solar feature still counts as being on it.
+# OSM nodes are often placed at a roof edge rather than dead centre.
+BUILDING_CHECK_RADIUS_M = 30.0
+# Overpass reads an `around` coordinate list as one linestring; too many points
+# and it returns nothing at all instead of erroring. Keep batches small.
+BUILDING_BATCH_SIZE = 20
+# Only features that could plausibly be on a roof are worth checking. Anything
+# larger than this is unambiguously a ground-mount array, and skipping them
+# keeps the lookup to a handful of batches on a long route.
+BUILDING_CHECK_MAX_AREA_M2 = 20_000.0
 MAX_LINK_M = 2_000.0
 
 # --- Tiling ----------------------------------------------------------------

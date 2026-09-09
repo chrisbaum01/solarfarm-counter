@@ -4,7 +4,7 @@ Counts ground-mounted solar parks along the Autobahn between two German cities.
 
 ```
 München → Nürnberg
-37 solar parks along 156.1 km of Autobahn (A 9, A 73)
+35 solar parks along 156.1 km of Autobahn (A 9, A 73)
 ```
 
 ![Screenshot](docs/screenshot.png)
@@ -68,13 +68,13 @@ On München → Nürnberg, with both sources:
 | after excluding rooftop PV | 547 |
 | after keeping only what is within 500 m of the Autobahn | 136 |
 | after merging features within 300 m of each other | 48 |
-| after dropping clusters under 10,000 m² | **37** |
+| after dropping clusters under 10,000 m², and points nothing corroborates | **35** |
 
 Every one of those steps is reported in the API response under `stats`, so the headline number
 is always traceable back to the raw data.
 
-The registry matters more than any threshold: the same route yields **22 parks from OSM alone**
-and **37 with the registry added**.
+The registry matters more than any threshold: the same route yields **20 parks from OSM alone**
+and **35 with the registry added**.
 
 ### Definitions you can change
 
@@ -85,18 +85,37 @@ and **37 with the registry added**.
 | `min_area_m2` | 10000 | Clusters smaller than this are not counted |
 | `include_bundesstrasse` | false | Also scan B-roads, for routes with no Autobahn |
 | `use_mastr` | true | Also use the official registry, not just OpenStreetMap |
+| `require_corroboration` | true | Drop OSM points with no area that no registry entry backs |
+| `exclude_on_buildings` | false | Additionally cross-check candidates against building outlines |
 
 These genuinely move the answer, which is why they are exposed rather than hard-coded
 (München → Nürnberg, both sources):
 
 ```
-min_area_m2   0 → 48 parks      min_area_m2  20000 → 33 parks
-           5000 → 43 parks                   50000 → 22 parks
-          10000 → 37 parks
+min_area_m2   0 → 46 parks      corridor_m   200 → 31 parks
+           5000 → 41 parks                   500 → 35 parks
+          10000 → 35 parks                  1000 → 44 parks
+          20000 → 31 parks
 ```
 
 Parks whose size is unknown — registry units that declare no land area — cannot be size-filtered
 and are always kept, flagged in the response rather than silently dropped or counted as zero.
+
+### Rooftop arrays that carry no rooftop tag
+
+The tag test only catches arrays somebody remembered to tag. `node/13155920665` on the A 8 is a
+bare `power=generator` + `generator:source=solar` point: no `location=roof`, and no area for the
+size filter to bite on. It sits one metre inside a `building=farm_auxiliary` — PV on a barn roof,
+counted as a solar park.
+
+`require_corroboration` closes that gap for free. A ground-mount park in Germany must by law be
+registered, and a real one is almost always traced as a polygon, so an OSM point with **neither an
+area nor a registry entry** is weak evidence and is left out. Every exclusion is counted in
+`stats.uncorroborated_points` and reported as a warning, and the rule can be switched off.
+
+`exclude_on_buildings` is the thorough version: it fetches building outlines and drops any
+candidate sitting on one. It is off by default because it costs an extra Overpass request per 20
+candidates, which is slow and unkind to a free service.
 
 ## API
 
@@ -153,7 +172,7 @@ flagged, rather than being silently dropped by the size filter or counted as zer
 pytest
 ```
 
-71 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
+86 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
 `tests/fixtures/`, including regression checks pinning the real München → Nürnberg counts.
 CI runs them on Python 3.10 through 3.13.
 

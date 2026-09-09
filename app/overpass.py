@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 
 import httpx
@@ -27,6 +28,93 @@ out geom;"""
 def _tile_key(tile: tuple[float, float, float, float]) -> str:
     s, w, _, _ = tile
     return f"tile:v{config.QUERY_VERSION}:{s:.4f}:{w:.4f}"
+
+
+def _buildings_key(points: list[tuple[float, float]], radius_m: float) -> str:
+    joined = ";".join(f"{lat:.5f},{lon:.5f}" for lat, lon in sorted(points))
+    digest = hashlib.sha1(f"{radius_m}|{joined}".encode()).hexdigest()[:20]
+    return f"bld:v{config.QUERY_VERSION}:{digest}"
+
+
+async def fetch_buildings_near(
+    points: list[tuple[float, float]], radius_m: float
+) -> list[list[tuple[float, float]]] | None:
+    """Building outlines near the given points, as lists of (lat, lon) rings.
+
+    Used to catch rooftop arrays that carry no rooftop tag at all -- OSM is full
+    of solar nodes whose only clue that they sit on a barn roof is that they are
+    inside the barn. Returns None if the lookup could not be done, so the caller
+    can carry on without silently pretending there are no buildings.
+    """
+    if not points:
+        return []
+
+    # Overpass reads an `around` coordinate list as a single linestring, and an
+    # oversized one quietly returns nothing rather than failing: 401 points gave
+    # 0 buildings while the same point alone gave 1. Query in small batches.
+    batches = [
+        points[i : i + config.BUILDING_BATCH_SIZE]
+        for i in range(0, len(points), config.BUILDING_BATCH_SIZE)
+    ]
+
+    rings: list[list[tuple[float, float]]] = []
+    any_failed = False
+    semaphore = asyncio.Semaphore(config.OVERPASS_CONCURRENCY)
+    headers = {"User-Agent": config.USER_AGENT}
+
+    async with httpx.AsyncClient(timeout=config.HTTP_TIMEOUT, headers=headers) as client:
+
+        async def one(batch: list[tuple[float, float]]):
+            key = _buildings_key(batch, radius_m)
+            cached = cache.get(key, config.TILE_TTL_SECONDS)
+            if cached is not None:
+                return [[tuple(p) for p in ring] for ring in cached]
+
+            coords = ",".join(f"{lat:.5f},{lon:.5f}" for lat, lon in batch)
+            query = (
+                f"[out:json][timeout:90];"
+                f'way["building"](around:{radius_m:.0f},{coords});'
+                f"out geom;"
+            )
+            async with semaphore:
+                for attempt in range(config.OVERPASS_MAX_RETRIES):
+                    endpoint = config.OVERPASS_ENDPOINTS[
+                        attempt % len(config.OVERPASS_ENDPOINTS)
+                    ]
+                    try:
+                        resp = await client.post(endpoint, data={"data": query})
+                        if resp.status_code in (429, 502, 503, 504):
+                            await asyncio.sleep(config.OVERPASS_BACKOFF_SECONDS[attempt])
+                            continue
+                        resp.raise_for_status()
+                        found = [
+                            [(p["lat"], p["lon"]) for p in el["geometry"]]
+                            for el in resp.json().get("elements", [])
+                            if el.get("geometry")
+                        ]
+                        cache.put(key, found)
+                        return found
+                    except (httpx.HTTPError, ValueError) as exc:
+                        log.warning("building lookup failed on %s: %s", endpoint, exc)
+                        await asyncio.sleep(config.OVERPASS_BACKOFF_SECONDS[attempt])
+            raise OverpassError("building batch failed")
+
+        results = await asyncio.gather(
+            *(one(b) for b in batches), return_exceptions=True
+        )
+
+    for result in results:
+        if isinstance(result, BaseException):
+            any_failed = True
+            continue
+        rings.extend(result)
+
+    # A partial answer would silently under-detect rooftops, so report the whole
+    # check as unavailable rather than pretending the gaps contained no buildings.
+    if any_failed and not rings:
+        log.error("building lookup failed; rooftop geometry check skipped")
+        return None
+    return rings
 
 
 class OverpassError(RuntimeError):

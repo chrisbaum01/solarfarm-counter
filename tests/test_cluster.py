@@ -135,14 +135,40 @@ class TestParkAssembly:
         assert [p.osm_ids for p in parks] == [["way/2"]]
         assert stats["below_min_area"] == 1
 
-    def test_node_only_cluster_survives_size_filter_and_is_flagged(self):
-        """Unknown size must not be silently treated as zero and dropped."""
+    def test_uncorroborated_osm_point_is_dropped(self):
+        """A bare OSM point with no area and nothing backing it is weak evidence.
+
+        In practice these are usually untagged rooftop arrays: node/13155920665
+        on the A8 is a panel node sitting inside a barn outline, with no rooftop
+        tag to catch it and no area for the size filter to bite on.
+        """
         node = {"type": "node", "id": 9, "lat": 49.0 + 50 / 110_574, "lon": 11.05,
                 "tags": {"power": "generator", "generator:source": "solar"}}
-        parks, _ = self._parks([node], min_area_m2=10_000)
+        parks, stats = self._parks([node], min_area_m2=10_000)
+        assert parks == []
+        assert stats["uncorroborated_points"] == 1
+
+    def test_registry_backing_rescues_an_area_less_point(self):
+        """Corroborated by the register, the same point is a real park."""
+        from app import mastr
+
+        lat, lon = 49.0 + 50 / 110_574, 11.05
+        node = {"type": "node", "id": 9, "lat": lat, "lon": lon,
+                "tags": {"power": "generator", "generator:source": "solar"}}
+        unit = mastr.to_elements(
+            [mastr.MastrUnit("SEE1", lat, lon, "u", "Solarpark", 900.0, None, None, None)]
+        )
+        parks, stats = self._parks([node] + unit, min_area_m2=10_000)
         assert len(parks) == 1
-        assert parks[0].area_m2 is None
-        assert not parks[0].area_known
+        assert parks[0].area_m2 is None  # still unknown, but no longer unsupported
+        assert stats["uncorroborated_points"] == 0
+
+    def test_uncorroborated_rule_can_be_turned_off(self):
+        node = {"type": "node", "id": 9, "lat": 49.0 + 50 / 110_574, "lon": 11.05,
+                "tags": {"power": "generator", "generator:source": "solar"}}
+        kept, _ = select_features([node], self.index, self.proj, 500)
+        parks, _ = build_parks(kept, self.proj, 300, 10_000, require_corroboration=False)
+        assert len(parks) == 1
 
     def test_parks_sorted_by_position_along_route(self):
         elements = [_way(1, 49.0, 11.15), _way(2, 49.0, 11.02), _way(3, 49.0, 11.09)]

@@ -15,6 +15,7 @@ from .geometry import (
     PolylineIndex,
     Projection,
     centroid,
+    distance_to_ring_m,
     polygon_centroid,
     ring_area_m2,
 )
@@ -184,6 +185,45 @@ def select_features(
     }
 
 
+def drop_features_on_buildings(
+    features: list[Feature],
+    buildings: list[list[tuple[float, float]]] | None,
+    proj: Projection,
+    tolerance_m: float = 12.0,
+) -> tuple[list[Feature], int]:
+    """Remove solar features that sit on a building outline.
+
+    The tag-based rooftop test only catches arrays somebody remembered to tag.
+    Plenty are not: node/13155920665 on the A8 is a bare `power=generator`
+    +`generator:source=solar` node with no location tag, no area to filter on,
+    and it sits one metre inside a `building=farm_auxiliary` — PV on a farm
+    shed, counted as a solar park.
+
+    `buildings` of None means the lookup failed; in that case nothing is
+    dropped, so a failed request cannot silently change the count.
+    """
+    if not buildings:
+        return features, 0
+
+    kept: list[Feature] = []
+    dropped = 0
+    for feature in features:
+        # Registry units are already restricted to ground-mounted installations
+        # at extract time, so a nearby building says nothing about them.
+        if feature.element.get("_source") == "mastr":
+            kept.append(feature)
+            continue
+        on_building = any(
+            distance_to_ring_m(feature.lat, feature.lon, ring, proj) <= tolerance_m
+            for ring in buildings
+        )
+        if on_building:
+            dropped += 1
+        else:
+            kept.append(feature)
+    return kept, dropped
+
+
 def _union_find(features: list[Feature], proj: Projection, link_m: float) -> list[list[int]]:
     """Single-link clustering of features within `link_m` of each other."""
     n = len(features)
@@ -228,11 +268,13 @@ def build_parks(
     proj: Projection,
     link_m: float,
     min_area_m2: float,
+    require_corroboration: bool = True,
 ) -> tuple[list[Park], dict[str, int]]:
-    """Cluster features into parks and apply the minimum-size filter."""
+    """Cluster features into parks and apply the size and evidence filters."""
     clusters = _union_find(features, proj, link_m)
     parks: list[Park] = []
     below_min = 0
+    uncorroborated = 0
 
     for indices in clusters:
         members = [features[i] for i in indices]
@@ -278,6 +320,17 @@ def build_parks(
             below_min += 1
             continue
 
+        # A ground-mount park in Germany is legally required to be registered,
+        # and a real one is almost always traced as a polygon. A bare OSM point
+        # with no area and no registry unit backing it is therefore weak
+        # evidence, and in practice is usually rooftop PV on a farm building --
+        # e.g. node/13155920665, a panel node sitting inside a barn outline with
+        # no rooftop tag to give it away. Requiring corroboration costs nothing
+        # and no extra requests.
+        if area is None and not registry and require_corroboration:
+            uncorroborated += 1
+            continue
+
         name = next(
             (m.element.get("tags", {}).get("name") for m in members
              if m.element.get("tags", {}).get("name")),
@@ -310,5 +363,6 @@ def build_parks(
     return parks, {
         "clusters": len(clusters),
         "below_min_area": below_min,
+        "uncorroborated_points": uncorroborated,
         "parks": len(parks),
     }

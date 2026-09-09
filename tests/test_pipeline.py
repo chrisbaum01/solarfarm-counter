@@ -58,7 +58,7 @@ class TestCounting:
         parks, stats = analyse_route(
             route, overpass_elements, SearchParams(corridor_m=500, min_area_m2=10_000)
         )
-        assert len(parks) == 22
+        assert len(parks) == 20
         assert stats["features_in_corridor"] == 49
         assert stats["clusters"] == 30
 
@@ -69,7 +69,7 @@ class TestCounting:
 
     @pytest.mark.parametrize(
         "min_area_m2,expected",
-        [(0, 30), (5_000, 26), (10_000, 22), (20_000, 19)],
+        [(0, 28), (5_000, 24), (10_000, 20), (20_000, 17)],
     )
     def test_size_filter_is_monotonic(self, route, overpass_elements, min_area_m2, expected):
         parks, _ = analyse_route(

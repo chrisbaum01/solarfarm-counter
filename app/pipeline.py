@@ -19,14 +19,24 @@ class SearchParams:
     min_area_m2: float = config.DEFAULT_MIN_AREA_M2
     include_bundesstrasse: bool = False
     use_mastr: bool = True
+    # Off by default: it costs one extra Overpass request per 20 candidates,
+    # which is slow and unkind to a free service. The corroboration rule below
+    # catches the same rooftop nodes for free.
+    exclude_on_buildings: bool = False
+    require_corroboration: bool = True
 
 
 def analyse_route(
     route: routing.Route,
     elements: list[dict],
     params: SearchParams,
+    buildings: list[list[tuple[float, float]]] | None = None,
 ) -> tuple[list[cluster.Park], dict]:
-    """Filter and cluster raw OSM elements against a route. Pure, no I/O."""
+    """Filter and cluster raw elements against a route. Pure, no I/O.
+
+    `buildings` are optional outlines used to drop untagged rooftop arrays; None
+    means the lookup was unavailable, and nothing is dropped on that basis.
+    """
     flat = [pt for line in route.polylines for pt in line]
     proj = projection_for(flat)
     index = PolylineIndex(route.polylines, proj)
@@ -34,10 +44,36 @@ def analyse_route(
     features, select_stats = cluster.select_features(
         elements, index, proj, params.corridor_m
     )
+    features, on_buildings = cluster.drop_features_on_buildings(features, buildings, proj)
     parks, cluster_stats = cluster.build_parks(
-        features, proj, params.link_m, params.min_area_m2
+        features, proj, params.link_m, params.min_area_m2, params.require_corroboration
     )
-    return parks, {**select_stats, **cluster_stats}
+    return parks, {
+        **select_stats,
+        "on_building_excluded": on_buildings,
+        "features_after_building_check": len(features),
+        **cluster_stats,
+    }
+
+
+def candidate_points(
+    route: routing.Route, elements: list[dict], params: SearchParams
+) -> list[tuple[float, float]]:
+    """Positions of in-corridor OSM features, for the building lookup.
+
+    Only these need checking, so the query stays small however long the route:
+    a few dozen points rather than every building along the motorway.
+    """
+    flat = [pt for line in route.polylines for pt in line]
+    proj = projection_for(flat)
+    index = PolylineIndex(route.polylines, proj)
+    features, _ = cluster.select_features(elements, index, proj, params.corridor_m)
+    return [
+        (f.lat, f.lon)
+        for f in features
+        if f.element.get("_source") != "mastr"
+        and (f.area_m2 is None or f.area_m2 <= config.BUILDING_CHECK_MAX_AREA_M2)
+    ]
 
 
 async def search(origin: str, destination: str, params: SearchParams) -> dict:
@@ -103,7 +139,22 @@ async def search(origin: str, destination: str, params: SearchParams) -> dict:
             "mapped. Run scripts/build_mastr.py to add it."
         )
 
-    parks, stats = analyse_route(route, elements, params)
+    # Catch rooftop arrays that carry no rooftop tag by checking whether they
+    # sit on a building. Only in-corridor candidates are looked up, so this is
+    # one small query regardless of route length.
+    buildings = None
+    if params.exclude_on_buildings:
+        points = candidate_points(route, elements, params)
+        buildings = await overpass.fetch_buildings_near(
+            points, config.BUILDING_CHECK_RADIUS_M
+        )
+        if buildings is None:
+            warnings.append(
+                "The building cross-check could not be run, so rooftop arrays that "
+                "carry no rooftop tag may still be counted."
+            )
+
+    parks, stats = analyse_route(route, elements, params, buildings)
 
     by_source = {"osm_only": 0, "mastr_only": 0, "both": 0}
     for park in parks:
@@ -130,6 +181,14 @@ async def search(origin: str, destination: str, params: SearchParams) -> dict:
             f"{unreachable} of {tile_stats['tiles_total']} map areas could not be fetched "
             "from OpenStreetMap, so this count is a lower bound. Re-run the search to "
             "retry just the missing areas."
+        )
+
+    dropped_points = stats.get("uncorroborated_points", 0)
+    if dropped_points:
+        warnings.append(
+            f"{dropped_points} OpenStreetMap point(s) were left out: they have no mapped "
+            "area and no entry in the official registry, which usually means an untagged "
+            "rooftop array. Set require_corroboration=false to include them."
         )
 
     unknown_area = sum(1 for p in parks if p.area_m2 is None)

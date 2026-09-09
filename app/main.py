@@ -59,6 +59,16 @@ async def api_search(
     use_mastr: bool = Query(
         True, description="Also use the Marktstammdatenregister, not just OpenStreetMap"
     ),
+    exclude_on_buildings: bool = Query(
+        False,
+        description="Also cross-check candidates against building outlines. More "
+        "thorough but costs extra Overpass requests and is much slower",
+    ),
+    require_corroboration: bool = Query(
+        True,
+        description="Drop OpenStreetMap points that have no area and no registry "
+        "entry backing them — usually untagged rooftop arrays",
+    ),
 ) -> SearchResponse:
     params = SearchParams(
         corridor_m=corridor_m,
@@ -66,6 +76,8 @@ async def api_search(
         min_area_m2=min_area_m2,
         include_bundesstrasse=include_bundesstrasse,
         use_mastr=use_mastr,
+        exclude_on_buildings=exclude_on_buildings,
+        require_corroboration=require_corroboration,
     )
     try:
         result = await search(origin, destination, params)

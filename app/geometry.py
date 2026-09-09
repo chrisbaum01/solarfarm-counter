@@ -149,6 +149,36 @@ class PolylineIndex:
         return self.distance_and_offset(lat, lon)[0]
 
 
+def point_in_ring(lat: float, lon: float, ring: Sequence[tuple[float, float]]) -> bool:
+    """Ray-casting containment test for a ring of (lat, lon) pairs."""
+    inside = False
+    n = len(ring)
+    for i in range(n):
+        y1, x1 = ring[i]
+        y2, x2 = ring[(i + 1) % n]
+        if (y1 > lat) != (y2 > lat):
+            xin = x1 + (lat - y1) * (x2 - x1) / (y2 - y1)
+            if lon < xin:
+                inside = not inside
+    return inside
+
+
+def distance_to_ring_m(
+    lat: float, lon: float, ring: Sequence[tuple[float, float]], proj: Projection
+) -> float:
+    """Distance from a point to a ring's boundary, in metres (0 if inside)."""
+    if point_in_ring(lat, lon, ring):
+        return 0.0
+    px, py = proj.xy(lat, lon)
+    best = math.inf
+    n = len(ring)
+    for i in range(n):
+        ax, ay = proj.xy(*ring[i])
+        bx, by = proj.xy(*ring[(i + 1) % n])
+        best = min(best, _point_segment_distance(px, py, ax, ay, bx, by))
+    return best
+
+
 def ring_area_m2(ring: Sequence[tuple[float, float]], proj: Projection) -> float:
     """Shoelace area of a closed ring of (lat, lon) pairs, in square metres."""
     if len(ring) < 3:
