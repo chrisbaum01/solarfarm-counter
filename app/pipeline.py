@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import time
 from dataclasses import dataclass
 
@@ -40,8 +41,16 @@ def analyse_route(
 
 
 async def search(origin: str, destination: str, params: SearchParams) -> dict:
-    """Full pipeline: geocode -> route -> Overpass tiles -> filter -> cluster."""
+    """Full pipeline: geocode -> route -> Overpass tiles -> filter -> cluster.
+
+    The whole search is bounded by `config.SEARCH_TIMEOUT_SECONDS`. Geocoding and
+    routing are quick and have their own limits; the open-ended part is fetching
+    Overpass tiles, so it gets whatever of the budget is left and abandons the
+    rest. A search that runs out of time still returns its partial result with
+    the count marked as a lower bound.
+    """
     started = time.perf_counter()
+    deadline = asyncio.get_running_loop().time() + config.SEARCH_TIMEOUT_SECONDS
     warnings: list[str] = []
 
     start = await geocode.geocode(origin)
@@ -77,7 +86,7 @@ async def search(origin: str, destination: str, params: SearchParams) -> dict:
         }
 
     tiles = bbox_tiles(route.polylines, params.corridor_m, config.TILE_DEG)
-    elements, tile_stats = await overpass.fetch_solar_features(tiles)
+    elements, tile_stats = await overpass.fetch_solar_features(tiles, deadline=deadline)
 
     # Both sources go through one clustering pass, so a park present in each is
     # merged rather than counted twice.
@@ -106,12 +115,21 @@ async def search(origin: str, destination: str, params: SearchParams) -> dict:
             by_source["osm_only"] += 1
     mastr_stats.update(by_source)
 
-    if tile_stats.get("tiles_failed"):
-        n = tile_stats["tiles_failed"]
+    if tile_stats.get("tiles_timed_out"):
+        n = tile_stats["tiles_timed_out"]
+        minutes = config.SEARCH_TIMEOUT_SECONDS / 60
         warnings.append(
-            f"{n} of {tile_stats['tiles_total']} map areas could not be fetched from "
-            "OpenStreetMap, so this count is a lower bound. Re-run the search to retry "
-            "just the missing areas."
+            f"The {minutes:.0f}-minute time limit was reached with {n} of "
+            f"{tile_stats['tiles_total']} map areas still outstanding, so this count is a "
+            "lower bound. Areas already fetched were cached — re-run the search and it "
+            "will pick up where this one stopped."
+        )
+    unreachable = tile_stats.get("tiles_failed", 0) - tile_stats.get("tiles_timed_out", 0)
+    if unreachable > 0:
+        warnings.append(
+            f"{unreachable} of {tile_stats['tiles_total']} map areas could not be fetched "
+            "from OpenStreetMap, so this count is a lower bound. Re-run the search to "
+            "retry just the missing areas."
         )
 
     unknown_area = sum(1 for p in parks if p.area_m2 is None)

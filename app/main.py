@@ -73,6 +73,8 @@ async def api_search(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except routing.RoutingError as exc:
         raise HTTPException(status_code=502, detail=f"Routing failed: {exc}") from exc
+    except overpass.OverpassTimeout as exc:
+        raise HTTPException(status_code=504, detail=str(exc)) from exc
     except overpass.OverpassError as exc:
         raise HTTPException(
             status_code=503,

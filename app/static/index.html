@@ -380,18 +380,26 @@ $('form').onsubmit = async ev => {
 
   const qs = new URLSearchParams(currentParams());
   history.replaceState(null, '', '?' + qs);
+  // The server caps a search at 5 minutes; give it a little slack, then stop
+  // waiting rather than leaving the spinner running forever.
+  const abort = new AbortController();
+  const timer = setTimeout(() => abort.abort(), 320000);
   try {
-    const r = await fetch('/api/search?' + qs);
+    const r = await fetch('/api/search?' + qs, { signal: abort.signal });
     const data = await r.json();
     if (!r.ok) throw new Error(data.detail || `Request failed (${r.status})`);
     render(data);
   } catch (err) {
     $('error').style.display = 'block';
-    $('error').textContent = err.message;
+    $('error').textContent = err.name === 'AbortError'
+      ? 'The search took longer than 5 minutes and was stopped. Map data already '
+        + 'fetched has been cached, so running it again will get further.'
+      : err.message;
     $('headline').style.display = 'none';
     $('chips').innerHTML = ''; $('resolved').textContent = '';
     $('warnings').innerHTML = ''; $('stats').textContent = '';
   } finally {
+    clearTimeout(timer);
     btn.disabled = false;
     btn.textContent = 'Count';
   }

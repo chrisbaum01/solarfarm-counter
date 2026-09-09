@@ -68,6 +68,11 @@ GEOCODE_TTL_SECONDS = 90 * 24 * 3600
 
 # --- Networking ------------------------------------------------------------
 HTTP_TIMEOUT = 180.0
+# Wall-clock ceiling for one search. Without it a degraded Overpass could keep a
+# request alive for hours: five retries per tile, each up to HTTP_TIMEOUT, with
+# only two tiles in flight. On expiry the search returns what it already has and
+# says the count is a lower bound, rather than failing outright.
+SEARCH_TIMEOUT_SECONDS = float(os.environ.get("SOLARFARM_SEARCH_TIMEOUT", 300))
 # Overpass mirrors routinely answer 429/504 under load. Short retries just burn
 # the budget without ever clearing the rate limit, so back off properly.
 OVERPASS_BACKOFF_SECONDS = [5.0, 15.0, 30.0, 60.0, 90.0]

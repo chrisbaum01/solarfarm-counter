@@ -4,8 +4,12 @@ Counts ground-mounted solar parks along the Autobahn between two German cities.
 
 ```
 München → Nürnberg
-21 solar parks along 156.1 km of Autobahn (A 9, A 73)
+47 solar parks along 156.1 km of Autobahn (A 9, A 73)
 ```
+
+![Screenshot](docs/screenshot.png)
+
+Requires Python 3.10+.
 
 No AI involved, and none needed — this is a deterministic geospatial problem. Route geometry
 comes from OSRM, solar features from OpenStreetMap, and the rest is arithmetic. An LLM would
@@ -49,25 +53,28 @@ deleted. Without it the app still works, but says so in a warning on every searc
    the motorway portions are extracted exactly — no map matching or guesswork. On the München →
    Nürnberg route this is 156.1 km of the 170.6 km trip; the city streets at either end are
    dropped.
-4. **Fetch solar features** from Overpass, tile by tile.
-5. **Filter and cluster** locally into distinct parks.
+4. **Fetch solar features** from Overpass, tile by tile, and from the local MaStR extract.
+5. **Filter and cluster** both sources together into distinct parks.
 
-### Why the raw OSM count is not the answer
+### Why the raw record count is not the answer
 
 OpenStreetMap maps a single large solar park as anything from one tagged polygon to dozens of
 separate panel-row ways, and it maps a great deal of rooftop PV that is not a park at all.
-On München → Nürnberg:
+On München → Nürnberg, with both sources:
 
 | stage | count |
 | --- | --- |
-| raw OSM elements in the scanned tiles | 791 |
-| after excluding rooftop PV | 363 |
-| after keeping only what is within 500 m of the Autobahn | 49 |
-| after merging features within 300 m of each other | 30 |
-| after dropping clusters under 10,000 m² | **21** |
+| raw source records in the scanned tiles | 975 |
+| after excluding rooftop PV | 547 |
+| after keeping only what is within 500 m of the Autobahn | 136 |
+| after merging features within 300 m of each other | 48 |
+| after dropping clusters under 10,000 m² | **47** |
 
 Every one of those steps is reported in the API response under `stats`, so the headline number
 is always traceable back to the raw data.
+
+The registry matters more than any threshold: the same route yields **22 parks from OSM alone**
+and **47 with the registry added** (5 OSM only, 23 in both, 19 registry only).
 
 ### Definitions you can change
 
@@ -79,13 +86,17 @@ is always traceable back to the raw data.
 | `include_bundesstrasse` | false | Also scan B-roads, for routes with no Autobahn |
 | `use_mastr` | true | Also use the official registry, not just OpenStreetMap |
 
-These genuinely move the answer, which is why they are exposed rather than hard-coded:
+These genuinely move the answer, which is why they are exposed rather than hard-coded
+(München → Nürnberg, both sources):
 
 ```
-min_area_m2   0 → 30 parks      corridor_m  200 → 18 parks
-          10000 → 21 parks                  500 → 21 parks
-          20000 → 16 parks                 1000 → 23 parks
+min_area_m2   0 → 48 parks      corridor_m  200 → 41 parks
+          10000 → 47 parks                  500 → 47 parks
+          20000 → 47 parks                 1000 → 56 parks
 ```
+
+The size filter bites far less once the registry is in play, because a unit the register calls a
+ground-mount solar park is counted regardless of its declared size.
 
 ## API
 
@@ -142,15 +153,30 @@ flagged, rather than being silently dropped by the size filter or counted as zer
 pytest
 ```
 
-49 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
+71 tests, fully offline — they run against recorded OSRM and Overpass fixtures in
 `tests/fixtures/`, including regression checks pinning the real München → Nürnberg counts.
+CI runs them on Python 3.10 through 3.13.
+
+## Licence
+
+Code is MIT (see `LICENSE`). **The data is licensed separately** — OpenStreetMap under ODbL and
+the Marktstammdatenregister under dl-de/by-2-0, both of which require attribution. If you deploy
+this publicly those obligations are yours; `ATTRIBUTION.md` sets out what each one needs.
 
 ## Limitations
 
 - Coverage depends on OpenStreetMap. A park nobody has mapped cannot be counted, and the
   rooftop/ground distinction relies on how diligently each feature was tagged.
 - Germany only (geocoding is country-restricted).
-- Capacity in MW is not reported: `generator:output:electricity` is too sparsely tagged to total
-  honestly.
+- Capacity in MW is reported only for parks present in the registry; OSM's
+  `generator:output:electricity` is too sparsely tagged to rely on.
+- Registry positions are single registered points, not outlines, so their distance from the road
+  is approximate and they carry declared rather than measured areas. Both facts are flagged per
+  park and in the response warnings.
 - Uses public demo servers for routing and Overpass. Fine for personal use; a deployment with
-  real traffic should self-host or use a commercial endpoint.
+  real traffic should self-host or use a commercial endpoint. Every endpoint is settable by
+  environment variable — see `ATTRIBUTION.md`.
+- A search is capped at 5 minutes (`SOLARFARM_SEARCH_TIMEOUT`). On expiry it returns what it has
+  and flags the count as a lower bound; already-fetched areas stay cached, so re-running resumes.
+- Single-user by design. There is no rate limiting, no auth, and the SQLite caches assume one
+  process — do not expose it to the open internet as-is.
