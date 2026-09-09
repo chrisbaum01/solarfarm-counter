@@ -34,6 +34,12 @@ modification, and requires naming the source. The required attribution is:
 The derived extract (`data/mastr_solar.sqlite3`) is not committed to this
 repository; it is built locally by `scripts/build_mastr.py`.
 
+Overpass queries are spread across several community-run mirrors
+(`overpass.openstreetmap.fr`, `overpass-api.de`, `overpass.kumi.systems`,
+`overpass.private.coffee`). These are volunteer resources with no service
+guarantee: keep concurrency low, cache aggressively, and self-host if your usage
+grows beyond personal scale.
+
 ## Nominatim — geocoding
 
 Operated by the OpenStreetMap Foundation under the

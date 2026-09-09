@@ -39,6 +39,11 @@ class EndpointPool:
     base_cooldown_s: float = 30.0
     max_cooldown_s: float = 600.0
     smoothing: float = 0.4
+    # Spread work only across mirrors of comparable speed. Rotating blindly is
+    # actively harmful when one mirror is far faster than the rest: most tiles
+    # start on a slow one and pay the full hedge delay before reaching the fast
+    # one. Measured, that turned a ~17 s search into 180 s.
+    peer_factor: float = 3.0
     _health: dict[str, EndpointHealth] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -79,17 +84,25 @@ class EndpointPool:
     def order_for(self, worker: int) -> list[str]:
         """Attempt order for one unit of work, rotated by `worker`.
 
-        Rotating spreads simultaneous requests across mirrors instead of having
-        every one of them hammer the single fastest endpoint.
+        Rotation spreads simultaneous requests instead of queueing them all on
+        one mirror -- but only across mirrors that are actually competitive.
+        A mirror more than `peer_factor` slower than the best is never chosen
+        first; it stays in the list as a fallback.
         """
         ranked = self.ranked()
         now = time.monotonic()
         available = [u for u in ranked if self._health[u].available(now)]
-        if len(available) > 1:
-            shift = worker % len(available)
-            rotated = available[shift:] + available[:shift]
-            return rotated + [u for u in ranked if u not in available]
-        return ranked
+        if len(available) <= 1:
+            return ranked
+
+        best = self._health[available[0]].latency_s
+        peers = [u for u in available if self._health[u].latency_s <= best * self.peer_factor]
+        rest = [u for u in ranked if u not in peers]
+        if len(peers) <= 1:
+            return peers + rest
+
+        shift = worker % len(peers)
+        return peers[shift:] + peers[:shift] + rest
 
     def record_success(self, url: str, latency_s: float) -> None:
         h = self._health[url]

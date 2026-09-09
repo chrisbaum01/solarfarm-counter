@@ -70,6 +70,16 @@ class TestLoadSpreading:
         for i in range(3):
             assert set(pool.order_for(i)) == {A, B, C}
 
+    def test_a_much_slower_mirror_is_never_tried_first(self):
+        """Rotating onto a slow mirror costs the full hedge delay per request."""
+        pool = EndpointPool([A, B, C])
+        pool.record_success(A, 1.0)
+        pool.record_success(B, 1.2)
+        pool.record_success(C, 60.0)  # far slower than its peers
+        firsts = {pool.order_for(i)[0] for i in range(6)}
+        assert firsts == {A, B}
+        assert all(C in pool.order_for(i) for i in range(6)), "still a fallback"
+
     def test_single_mirror_is_not_rotated(self):
         pool = EndpointPool([A])
         assert pool.order_for(5) == [A]

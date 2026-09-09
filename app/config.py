@@ -50,13 +50,17 @@ OSRM_URL = os.environ.get(
 # answers an out-of-area query with HTTP 200 and zero elements, which is
 # indistinguishable from "no solar farms here" and gets cached as fact.
 # overpass.osm.ch was in this list and does exactly that: Zurich returns 18,577
-# buildings, Munich returns 0. Verify coverage before adding an endpoint.
+# buildings, Munich returns 0. Verify coverage with scripts/check_mirrors.py
+# before adding an endpoint -- it checks German data is present, not merely that
+# the server answers.
 OVERPASS_ENDPOINTS = [
     e.strip()
     for e in os.environ.get(
         "SOLARFARM_OVERPASS_ENDPOINTS",
+        "https://overpass.openstreetmap.fr/api/interpreter,"
         "https://overpass-api.de/api/interpreter,"
-        "https://overpass.kumi.systems/api/interpreter",
+        "https://overpass.kumi.systems/api/interpreter,"
+        "https://overpass.private.coffee/api/interpreter",
     ).split(",")
     if e.strip()
 ]

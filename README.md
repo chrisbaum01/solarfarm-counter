@@ -173,12 +173,23 @@ returns the entire 60.5 km A 8 as one step with no `ref` at all, which cut the s
 but only when the step is over 2 km and averages 80 km/h or more, so a slip road signed for the A 3
 is not mistaken for the A 3 itself. That route now scans 64.2 km.
 
+**Cold searches are bounded by mirror latency, not bandwidth.** Tile payloads are tiny (median
+4 KB), so the cost is entirely how long a mirror takes to answer. Measured cold, with an empty
+cache: München → Nürnberg (23 tiles) takes ~45 s and Stuttgart → Karlsruhe (10 tiles) ~43 s. Both
+were 180 s and 90 s before mirror selection was made health-aware.
+
 **Mirrors are chosen by measured health, not by list order.** Public Overpass instances vary wildly
 and unpredictably: within one minute, overpass-api.de refused connections outright while
 kumi.systems answered real tile queries in 38–176 s. Each mirror's recent latency and failures are
-tracked; requests go to whichever is actually working, concurrent tiles start on different mirrors
-rather than queueing behind the fastest, and a mirror that stalls for 12 s is hedged — a second
-request goes out alongside it and the first reply wins.
+tracked; requests go to whichever is actually working, and a mirror that stalls for 12 s is hedged —
+a second request goes out alongside it and the first reply wins.
+
+Concurrent tiles are spread across mirrors, but only across mirrors of *comparable* speed. Blind
+rotation is worse than none when one mirror is far faster: most tiles start on a slow one and pay
+the full hedge delay first, which is exactly what made a ~45 s search take 180 s.
+
+Run `python scripts/check_mirrors.py` to verify a mirror before adding it. It tests for known German
+data rather than merely that the server answers.
 
 **Overpass mirrors must have global coverage.** A regional instance answers an out-of-area
 query with HTTP 200 and zero elements — indistinguishable from "no solar farms here", and it gets
