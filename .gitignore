@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+cache.sqlite3
+cache.sqlite3-wal
+cache.sqlite3-shm
+.venv/
+venv/
+.DS_Store
+
+# Derived MaStR extract — rebuild with scripts/build_mastr.py
+data/mastr_solar.sqlite3

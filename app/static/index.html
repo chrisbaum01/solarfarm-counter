@@ -1,0 +1,401 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Solarfarm Counter</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"
+      integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="">
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #fff; --ink: #14181f; --muted: #6b7480;
+    --line: #e2e6eb; --accent: #d97706; --accent-soft: #fef3c7;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #14181f; --panel: #1c222b; --ink: #e9edf2; --muted: #98a2b0;
+      --line: #2b3341; --accent: #f0a92e; --accent-soft: #3a2f14;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--ink);
+    font: 15px/1.5 system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  header { padding: 20px 24px 0; max-width: 1180px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; margin-bottom: 18px; }
+  main { max-width: 1180px; margin: 0 auto; padding: 0 24px 48px; }
+  .card {
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 10px; padding: 16px; margin-bottom: 16px;
+  }
+  form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; }
+  .field { display: flex; flex-direction: column; gap: 4px; }
+  .field.grow { flex: 1 1 190px; }
+  label { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); }
+  input[type=text], input[type=number] {
+    background: var(--bg); color: var(--ink); border: 1px solid var(--line);
+    border-radius: 7px; padding: 9px 11px; font: inherit; width: 100%;
+  }
+  input[type=number] { width: 116px; }
+  input:focus { outline: 2px solid var(--accent); outline-offset: -1px; }
+  button {
+    background: var(--accent); color: #1a1205; border: 0; border-radius: 7px;
+    padding: 10px 20px; font: inherit; font-weight: 600; cursor: pointer;
+  }
+  button:disabled { opacity: .55; cursor: progress; }
+  .check { flex-direction: row; align-items: center; gap: 7px; padding-bottom: 9px; }
+  .check label { text-transform: none; letter-spacing: 0; font-size: 13px; color: var(--ink); }
+
+  #headline { display: none; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+  .count { font-size: 40px; font-weight: 700; color: var(--accent); line-height: 1; }
+  .headline-text { font-size: 15px; }
+  .resolved { color: var(--muted); font-size: 12px; margin-top: 8px; }
+  .chips { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 10px; }
+  .chip {
+    background: var(--accent-soft); border-radius: 20px; padding: 3px 11px;
+    font-size: 12px; font-weight: 600;
+  }
+  .note {
+    border-left: 3px solid var(--accent); padding: 8px 12px; margin-top: 12px;
+    background: var(--accent-soft); border-radius: 0 6px 6px 0; font-size: 13px;
+  }
+  #map { height: 440px; border-radius: 10px; border: 1px solid var(--line); display: none; }
+  #map.show { display: block; }
+
+  .table-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 14px; }
+  th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+  th { font-size: 11px; text-transform: uppercase; letter-spacing: .05em; color: var(--muted); cursor: pointer; user-select: none; }
+  th:hover { color: var(--accent); }
+  th[aria-sort] { color: var(--accent); }
+  tbody tr:hover { background: var(--accent-soft); cursor: pointer; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .unknown { color: var(--muted); font-style: italic; }
+  .src {
+    font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 20px;
+    border: 1px solid var(--line); cursor: help;
+  }
+  .src-osm   { background: #dbeafe; color: #1e40af; }
+  .src-mastr { background: #dcfce7; color: #166534; }
+  .src-both  { background: var(--accent-soft); color: #92400e; }
+  @media (prefers-color-scheme: dark) {
+    .src-osm   { background: #1e3a5f; color: #bfdbfe; }
+    .src-mastr { background: #143320; color: #bbf7d0; }
+    .src-both  { background: #3a2f14; color: #fde68a; }
+  }
+  a { color: var(--accent); }
+  .stats { color: var(--muted); font-size: 12px; margin-top: 12px; }
+  #error { display: none; color: #b91c1c; }
+  @media (prefers-color-scheme: dark) { #error { color: #fca5a5; } }
+  .spinner {
+    display: inline-block; width: 13px; height: 13px; margin-right: 7px;
+    border: 2px solid var(--line); border-top-color: var(--accent);
+    border-radius: 50%; animation: spin .7s linear infinite; vertical-align: -2px;
+  }
+  @keyframes spin { to { transform: rotate(360deg); } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Solarfarm Counter</h1>
+  <div class="sub">Counts ground-mounted solar parks along the Autobahn between two German cities. Data from OpenStreetMap.</div>
+</header>
+
+<main>
+  <div class="card">
+    <form id="form">
+      <div class="field grow">
+        <label for="from">From</label>
+        <input type="text" id="from" value="München" required autocomplete="off">
+      </div>
+      <div class="field grow">
+        <label for="to">To</label>
+        <input type="text" id="to" value="Nürnberg" required autocomplete="off">
+      </div>
+      <div class="field">
+        <label for="corridor">Corridor (m)</label>
+        <input type="number" id="corridor" value="500" min="50" max="5000" step="50">
+      </div>
+      <div class="field">
+        <label for="minarea">Min area (m²)</label>
+        <input type="number" id="minarea" value="10000" min="0" step="1000">
+      </div>
+      <div class="field">
+        <label for="link">Merge dist (m)</label>
+        <input type="number" id="link" value="300" min="10" max="2000" step="10">
+      </div>
+      <div class="field check">
+        <input type="checkbox" id="bundes">
+        <label for="bundes">Include B-roads</label>
+      </div>
+      <div class="field check">
+        <input type="checkbox" id="mastr" checked>
+        <label for="mastr">Use registry (MaStR)</label>
+      </div>
+      <button type="submit" id="go">Count</button>
+    </form>
+    <div class="stats" id="hint">
+      First search for a region takes a while — OpenStreetMap tiles are fetched live.
+      Later searches reuse the cache and are near-instant.
+    </div>
+  </div>
+
+  <div class="card" id="result-card" style="display:none">
+    <div id="error"></div>
+    <div id="headline">
+      <span class="count" id="count">–</span>
+      <span class="headline-text" id="headline-text"></span>
+    </div>
+    <div class="chips" id="chips"></div>
+    <div class="resolved" id="resolved"></div>
+    <div id="warnings"></div>
+    <div class="stats" id="stats"></div>
+  </div>
+
+  <div id="map"></div>
+
+  <div class="card" id="table-card" style="display:none">
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th data-key="idx">#</th>
+            <th data-key="name">Name</th>
+            <th data-key="area_m2">Area</th>
+            <th data-key="capacity_kw">Capacity</th>
+            <th data-key="km_along_route">km along route</th>
+            <th data-key="distance_m">From road</th>
+            <th data-key="sourceLabel">Source</th>
+            <th>Link</th>
+          </tr>
+        </thead>
+        <tbody id="tbody"></tbody>
+      </table>
+    </div>
+  </div>
+</main>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"
+        integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
+<script>
+const $ = id => document.getElementById(id);
+let map, layers = null, parks = [], markers = [], sortKey = 'km_along_route', sortAsc = true;
+
+function initMap() {
+  if (map) return;
+  map = L.map('map', { scrollWheelZoom: false });
+  L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 18, attribution: '&copy; OpenStreetMap contributors'
+  }).addTo(map);
+}
+
+const fmtArea = m2 => m2 == null ? null
+  : m2 >= 10000 ? (m2 / 10000).toFixed(1) + ' ha' : Math.round(m2) + ' m²';
+
+function render(data) {
+  parks = data.parks;
+  $('result-card').style.display = '';
+  $('error').style.display = 'none';
+  $('headline').style.display = 'flex';
+
+  $('count').textContent = data.count;
+  const road = data.params.include_bundesstrasse ? 'motorway/B-road' : 'Autobahn';
+  $('headline-text').innerHTML = data.count === 1
+    ? `solar park along ${data.matched_km.toFixed(1)} km of ${road}`
+    : `solar parks along ${data.matched_km.toFixed(1)} km of ${road}`;
+
+  $('chips').innerHTML = data.refs.map(r => `<span class="chip">${r}</span>`).join('');
+  $('resolved').textContent =
+    `${data.origin.name} → ${data.destination.name} · ` +
+    `${data.total_km.toFixed(0)} km total, ~${Math.round(data.duration_min)} min driving`;
+
+  $('warnings').innerHTML = (data.warnings || [])
+    .map(w => `<div class="note">${w}</div>`).join('');
+
+  const s = data.stats;
+  let line = '';
+  if (s.raw_elements) {
+    line = `${s.raw_elements} source records → ${s.rooftop_excluded} rooftop excluded → `
+      + `${s.features_in_corridor} in corridor → ${s.clusters} clusters → `
+      + `${s.below_min_area} below min area → ${data.count} parks.`;
+    if (s.mastr_only !== undefined) {
+      line += ` Provenance: ${s.osm_only} OSM only, ${s.both} in both, `
+        + `${s.mastr_only} registry only.`;
+    }
+    line += ` Tiles: ${s.tiles_cached}/${s.tiles_total} cached. ${data.elapsed_s.toFixed(1)}s.`;
+  }
+  $('stats').textContent = line;
+
+  // map
+  if (data.route_geometry.length) {
+    initMap();
+    $('map').classList.add('show');
+    if (layers) layers.forEach(l => map.removeLayer(l));
+    layers = []; markers = [];
+
+    const toLatLng = c => c.map(p => [p[1], p[0]]);
+    layers.push(L.polyline(toLatLng(data.route_geometry),
+      { color: '#94a3b8', weight: 3, opacity: .7 }).addTo(map));
+    data.scanned_geometry.forEach(line => {
+      layers.push(L.polyline(toLatLng(line),
+        { color: '#2563eb', weight: 5, opacity: .85 }).addTo(map));
+    });
+
+    // Registry-only parks are drawn in a different colour: their position is a
+    // registered point, so it is less precise than a traced outline.
+    const FILL = { osm: '#f59e0b', mastr: '#22c55e', both: '#f59e0b' };
+    const EDGE = { osm: '#b45309', mastr: '#15803d', both: '#b45309' };
+    parks.forEach(p => {
+      const k = sourceKey(p), area = fmtArea(p.area_m2);
+      const m = L.circleMarker([p.lat, p.lon], {
+        radius: 7, color: EDGE[k], fillColor: FILL[k], fillOpacity: .9,
+        weight: 2, dashArray: k === 'mastr' ? '3,2' : null
+      }).addTo(map).bindPopup(
+        `<b>${p.name || 'Unnamed solar park'}</b><br>`
+        + `${area ? area + (p.area_is_declared ? ' (declared)' : '') : 'size unknown'}`
+        + `${p.capacity_kw ? ' · ' + (p.capacity_kw / 1000).toFixed(1) + ' MW' : ''}`
+        + ` · ${Math.round(p.distance_m)} m from road<br>`
+        + `km ${p.km_along_route.toFixed(1)} · source: ${SRC[k][0]}<br>`
+        + p.osm_ids.slice(0, 4).map(id => id.startsWith('mastr/')
+            ? `<span>${id}</span>`
+            : `<a href="https://www.openstreetmap.org/${id}" target="_blank" rel="noopener">${id}</a>`
+          ).join(' ')
+      );
+      layers.push(m); markers.push(m);
+    });
+
+    const all = L.featureGroup(layers);
+    map.fitBounds(all.getBounds(), { padding: [24, 24] });
+  }
+
+  renderTable();
+}
+
+const SRC = {
+  osm:   ['OSM',   'Traced outline in OpenStreetMap'],
+  mastr: ['MaStR', 'Official registry only — position is a registered point, not an outline'],
+  both:  ['both',  'Present in OpenStreetMap and the official registry'],
+};
+function sourceKey(p) {
+  const s = p.sources || ['osm'];
+  return s.length > 1 ? 'both' : (s[0] || 'osm');
+}
+function sourceChip(p) {
+  const k = sourceKey(p), [label, title] = SRC[k] || SRC.osm;
+  return `<span class="src src-${k}" title="${title}">${label}</span>`;
+}
+
+function renderTable() {
+  $('table-card').style.display = parks.length ? '' : 'none';
+  const rows = parks.map((p, i) => ({ ...p, idx: i + 1, sourceLabel: sourceKey(p) }));
+  rows.sort((a, b) => {
+    let x = a[sortKey], y = b[sortKey];
+    // Unknown areas sort last regardless of direction, rather than pretending to be 0.
+    if (x == null) return 1;
+    if (y == null) return -1;
+    if (typeof x === 'string') return sortAsc ? x.localeCompare(y) : y.localeCompare(x);
+    return sortAsc ? x - y : y - x;
+  });
+
+  $('tbody').innerHTML = rows.map(p => {
+    let area = fmtArea(p.area_m2);
+    // Declared registry figures are marked, so a stated area is never mistaken
+    // for one measured off traced geometry.
+    if (area && p.area_is_declared) area = `${area}<span class="unknown"> decl.</span>`;
+    const osmId = p.osm_ids.find(i => !i.startsWith('mastr/'));
+    const link = osmId
+      ? `<a href="https://www.openstreetmap.org/${osmId}" target="_blank" rel="noopener">OSM</a>`
+      : '<span class="unknown">—</span>';
+    return `<tr data-lat="${p.lat}" data-lon="${p.lon}">
+      <td class="num">${p.idx}</td>
+      <td>${p.name || '<span class="unknown">unnamed</span>'}</td>
+      <td class="num">${area || '<span class="unknown">unknown</span>'}</td>
+      <td class="num">${p.capacity_kw ? (p.capacity_kw / 1000).toFixed(1) + ' MW' : '<span class="unknown">—</span>'}</td>
+      <td class="num">${p.km_along_route.toFixed(1)}</td>
+      <td class="num">${Math.round(p.distance_m)} m</td>
+      <td>${sourceChip(p)}</td>
+      <td>${link}</td>
+    </tr>`;
+  }).join('');
+
+  document.querySelectorAll('#tbody tr').forEach(tr => {
+    tr.onclick = e => {
+      if (e.target.tagName === 'A' || !map) return;
+      map.setView([+tr.dataset.lat, +tr.dataset.lon], 14);
+      const m = markers.find(mk => {
+        const ll = mk.getLatLng();
+        return Math.abs(ll.lat - +tr.dataset.lat) < 1e-9;
+      });
+      if (m) m.openPopup();
+    };
+  });
+}
+
+document.querySelectorAll('th[data-key]').forEach(th => {
+  th.onclick = () => {
+    const k = th.dataset.key;
+    sortAsc = sortKey === k ? !sortAsc : true;
+    sortKey = k;
+    document.querySelectorAll('th[data-key]').forEach(o => o.removeAttribute('aria-sort'));
+    th.setAttribute('aria-sort', sortAsc ? 'ascending' : 'descending');
+    renderTable();
+  };
+});
+
+function currentParams() {
+  return {
+    from: $('from').value, to: $('to').value,
+    corridor_m: $('corridor').value, min_area_m2: $('minarea').value,
+    link_m: $('link').value, include_bundesstrasse: $('bundes').checked,
+    use_mastr: $('mastr').checked
+  };
+}
+
+// Restore state from the URL so a search can be linked to and shared.
+(function restore() {
+  const q = new URLSearchParams(location.search);
+  if (!q.has('from')) return;
+  $('from').value = q.get('from') || '';
+  $('to').value = q.get('to') || '';
+  if (q.has('corridor_m')) $('corridor').value = q.get('corridor_m');
+  if (q.has('min_area_m2')) $('minarea').value = q.get('min_area_m2');
+  if (q.has('link_m')) $('link').value = q.get('link_m');
+  $('bundes').checked = q.get('include_bundesstrasse') === 'true';
+  if (q.has('use_mastr')) $('mastr').checked = q.get('use_mastr') !== 'false';
+  addEventListener('DOMContentLoaded', () => $('form').requestSubmit());
+  if (document.readyState !== 'loading') $('form').requestSubmit();
+})();
+
+$('form').onsubmit = async ev => {
+  ev.preventDefault();
+  const btn = $('go');
+  btn.disabled = true;
+  btn.innerHTML = '<span class="spinner"></span>Counting…';
+  $('result-card').style.display = '';
+  $('headline').style.display = 'none';
+  $('error').style.display = 'none';
+  $('table-card').style.display = 'none';
+
+  const qs = new URLSearchParams(currentParams());
+  history.replaceState(null, '', '?' + qs);
+  try {
+    const r = await fetch('/api/search?' + qs);
+    const data = await r.json();
+    if (!r.ok) throw new Error(data.detail || `Request failed (${r.status})`);
+    render(data);
+  } catch (err) {
+    $('error').style.display = 'block';
+    $('error').textContent = err.message;
+    $('headline').style.display = 'none';
+    $('chips').innerHTML = ''; $('resolved').textContent = '';
+    $('warnings').innerHTML = ''; $('stats').textContent = '';
+  } finally {
+    btn.disabled = false;
+    btn.textContent = 'Count';
+  }
+};
+</script>
+</body>
+</html>
